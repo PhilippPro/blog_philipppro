@@ -1,0 +1,17 @@
+---
+title: "Welcome To My Blog"
+author: "Philipp Probst"
+date: "2023-12-01"
+categories: [news]
+image: "image.jpg"
+---
+
+This is the first post in my new Quarto blog. Welcome!
+
+I followed this instruction to create my new Quarto blog: <https://quarto.org/docs/websites/website-blog.html>
+
+Quarto is much more flexible and plays very well with R-Markdown documents. That's why I decided to migrate from my [old blog](http://philipppro.github.io/about/).
+
+My old will not get any updates anymore and I will probably migrate some of the content from there.
+
+![](image.jpg)

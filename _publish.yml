@@ -1,0 +1,4 @@
+- source: project
+  quarto-pub:
+    - id: 8fe92c59-d9ba-4add-a6a1-aac42ba7dfe0
+      url: 'https://philipppro.quarto.pub/blog_philipppro'

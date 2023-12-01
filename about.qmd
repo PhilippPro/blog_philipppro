@@ -1,0 +1,59 @@
+<!-- # --- -->
+<!-- # title: "About" -->
+<!-- # image: profile.jpg -->
+<!-- # about: -->
+<!-- #   template: jolla -->
+<!-- #   links: -->
+<!-- #     - icon: twitter -->
+<!-- #       text: Twitter -->
+<!-- #       href: https://twitter.com -->
+<!-- #     - icon: linkedin -->
+<!-- #       text: LinkedIn -->
+<!-- #       href: https://linkedin.com -->
+<!-- #     - icon: github -->
+<!-- #       text: Github -->
+<!-- #       href: https://github.com -->
+<!-- # --- -->
+
+---
+layout: page
+title: About
+permalink: /about/
+---
+
+## The blog
+
+This blog is mainly about topics in machine learning, statistics and R.
+
+## Me
+
+I am now working at the insurance company Allianz Suisse in Zürich. 
+Previously I worked for [Digital Ratio](https://www.digital-ratio.de/) as a data science consultant.
+Feel free to [contact me](mailto:philipp_probst@gmx.de). 
+
+[My Publications](https://scholar.google.de/citations?user=sQ-zbvkAAAAJ&hl=de)
+
+PhD in statistics at [IBE LMU Munich](https://www.ibe.med.uni-muenchen.de/mitarbeiter/ehemalige/probst/index.html)
+
+Master of Science in Statistics at TU Dortmund
+
+
+## Miscellaneous
+
+I was active on [Kaggle](https://www.kaggle.com/icedragon).
+
+A nice blog aggregator for blogs in the R-world is [https://www.r-bloggers.com](https://www.r-bloggers.com).
+
+RSS-feed: [RSS](http://philipppro.github.io/feed.xml)
+
+## Book recommendations
+
+- [The elements of statistical learning](https://link.springer.com/book/10.1007/978-0-387-84858-7) 
+- [Advanced R](https://adv-r.hadley.nz/)
+- [Mastering Shiny](https://mastering-shiny.org/)
+- [Data Science for Business](https://www.oreilly.com/library/view/data-science-for/9781449374273/)
+- [Factfulness](https://www.goodreads.com/book/show/34890015-factfulness)
+
+### Contact me
+
+[philipp_probst@gmx.de](mailto:philipp_probst@gmx.de)
