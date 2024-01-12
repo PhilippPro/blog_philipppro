@@ -2,7 +2,7 @@
 title: "Welcome To My Blog"
 author: "Philipp Probst"
 date: "2023-12-01"
-categories: [news]
+categories: [news, R]
 image: "image.jpg"
 ---
 
