@@ -16,3 +16,6 @@ RSS-Feed:\
 [https://philipppro.quarto.pub/blog_philipppro/index-R.xml](https://philipppro.quarto.pub/blog_philipppro/index.xml)
 
 usw.
+
+Help:\
+<https://quarto.org/docs/publishing/quarto-pub.html>
