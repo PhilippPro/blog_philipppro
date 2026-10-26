@@ -1,0 +1,1351 @@
+---
+title: "When Do Causal ML Models Beat LM / GLM / GBM?"
+subtitle: "Nine simulated toy cases with a known true effect"
+author: "Philipp Probst"
+date: "2026-10-26"
+categories: [R, causal inference, simulation]
+description: "A simulation study with nine toy cases and a known true effect: when do causal forests, Double ML, AIPW and meta-learners beat plain LM, GLM and GBM, and how can you tell without knowing the truth?"
+image: thumbnail.png
+lang: en
+page-layout: full
+toc: true
+toc-depth: 3
+toc-location: left
+format:
+  html:
+    css: post.css
+    fig-width: 11
+    fig-height: 4
+execute:
+  echo: false
+  message: false
+  warning: false
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE, fig.width = 11, fig.height = 4)
+library(ggplot2)
+source("R/dgp.R"); source("R/estimators.R"); source("R/evaluation.R"); source("R/cases.R"); source("R/report_helpers.R")
+res  <- read.csv("results/raw_results.csv")
+summ <- read.csv("results/summary.csv", check.names = FALSE)
+case_levels <- vapply(cases, `[[`, "", "id")
+res$case  <- factor(res$case,  levels = case_levels)
+summ$case <- factor(summ$case, levels = case_levels)
+res$method <- factor(res$method, levels = unique(res$method))
+summ$method <- factor(summ$method, levels = levels(res$method))
+n_reps <- max(res$rep)
+theme_set(theme_minimal(base_size = 12))
+f2 <- function(x, d = 2) formatC(x, format = "f", digits = d)
+f23 <- function(x) ifelse(abs(x) < 0.2, sprintf("%.3f", x), sprintf("%.2f", x))  # 3 digits for small values
+plot_h <- function(k) 0.75 + 0.32 * length(cases[[k]]$methods)
+# Look up a simulated result, e.g. v(3, "Causal forest", "ATE_bias")
+v <- function(k, method, metric) f23(summ[summ$case == case_levels[k] & summ$method == method, metric])
+```
+
+```{r refs}
+# Literature: number = row in this table (grouped as in the section "References"); cite("key1", "key2") -> [n, m]
+refs <- read.csv(text = '
+key|group|text
+hernan2020|Introductory reading|Hernán, M. A., Robins, J. M. (2020). <i>Causal Inference: What If.</i> Chapman & Hall/CRC. Free: <a href="https://miguelhernan.org/whatifbook">miguelhernan.org/whatifbook</a>
+chernozhukov2024|Introductory reading|Chernozhukov, V., Hansen, C., Kallus, N., Spindler, M., Syrgkanis, V. (2024). <i>Applied Causal Inference Powered by ML and AI.</i> arXiv:2403.02467. Free: <a href="https://causalml-book.org">causalml-book.org</a>
+facure2022|Introductory reading|Facure, M. (2022). <i>Causal Inference for the Brave and True.</i> Free: <a href="https://matheusfacure.github.io/python-causality-handbook/">matheusfacure.github.io/python-causality-handbook</a>
+pearl2016|Introductory reading|Pearl, J., Glymour, M., Jewell, N. P. (2016). <i>Causal Inference in Statistics: A Primer.</i> Wiley.
+angrist2009|Introductory reading|Angrist, J. D., Pischke, J.-S. (2009). <i>Mostly Harmless Econometrics.</i> Princeton University Press.
+molnar2022|Introductory reading|Molnar, C. (2022). <i>Modeling Mindsets: The Many Cultures of Learning From Data.</i> <a href="https://christophmolnar.com/books/modeling-mindsets">christophmolnar.com/books/modeling-mindsets</a>
+chernozhukov2018|Methods|Chernozhukov, V., Chetverikov, D., Demirer, M., Duflo, E., Hansen, C., Newey, W., Robins, J. (2018). Double/debiased machine learning for treatment and structural parameters. <i>The Econometrics Journal</i> 21(1), C1–C68. <a href="https://doi.org/10.1111/ectj.12097">doi:10.1111/ectj.12097</a>
+nie2021|Methods|Nie, X., Wager, S. (2021). Quasi-oracle estimation of heterogeneous treatment effects. <i>Biometrika</i> 108(2), 299–319. <a href="https://doi.org/10.1093/biomet/asaa076">doi:10.1093/biomet/asaa076</a>
+kunzel2019|Methods|Künzel, S. R., Sekhon, J. S., Bickel, P. J., Yu, B. (2019). Metalearners for estimating heterogeneous treatment effects using machine learning. <i>PNAS</i> 116(10), 4156–4165. <a href="https://doi.org/10.1073/pnas.1804597116">doi:10.1073/pnas.1804597116</a>
+wager2018|Methods|Wager, S., Athey, S. (2018). Estimation and inference of heterogeneous treatment effects using random forests. <i>JASA</i> 113(523), 1228–1242. <a href="https://doi.org/10.1080/01621459.2017.1319839">doi:10.1080/01621459.2017.1319839</a>
+athey2019|Methods|Athey, S., Tibshirani, J., Wager, S. (2019). Generalized random forests. <i>Annals of Statistics</i> 47(2), 1148–1178. <a href="https://doi.org/10.1214/18-AOS1709">doi:10.1214/18-AOS1709</a>
+athey2016|Methods|Athey, S., Imbens, G. (2016). Recursive partitioning for heterogeneous causal effects. <i>PNAS</i> 113(27), 7353–7360. <a href="https://doi.org/10.1073/pnas.1510489113">doi:10.1073/pnas.1510489113</a>
+robins1994|Methods|Robins, J. M., Rotnitzky, A., Zhao, L. P. (1994). Estimation of regression coefficients when some regressors are not always observed. <i>JASA</i> 89(427), 846–866. <a href="https://doi.org/10.1080/01621459.1994.10476818">doi:10.1080/01621459.1994.10476818</a>
+kennedy2023|Methods|Kennedy, E. H. (2023). Towards optimal doubly robust estimation of heterogeneous causal effects. <i>Electronic Journal of Statistics</i> 17(2), 3008–3049. <a href="https://doi.org/10.1214/23-EJS2157">doi:10.1214/23-EJS2157</a>
+hill2011|Methods|Hill, J. L. (2011). Bayesian nonparametric modeling for causal inference. <i>Journal of Computational and Graphical Statistics</i> 20(1), 217–240. <a href="https://doi.org/10.1198/jcgs.2010.08162">doi:10.1198/jcgs.2010.08162</a>
+hahn2020|Methods|Hahn, P. R., Murray, J. S., Carvalho, C. M. (2020). Bayesian regression tree models for causal inference: Regularization, confounding, and heterogeneous effects. <i>Bayesian Analysis</i> 15(3), 965–1056. <a href="https://doi.org/10.1214/19-BA1195">doi:10.1214/19-BA1195</a>
+vanderlaan2011|Methods|van der Laan, M. J., Rose, S. (2011). <i>Targeted Learning: Causal Inference for Observational and Experimental Data.</i> Springer.
+athey2021|Methods|Athey, S., Wager, S. (2021). Policy learning with observational data. <i>Econometrica</i> 89(1), 133–161. <a href="https://doi.org/10.3982/ECTA15732">doi:10.3982/ECTA15732</a>
+cinelli2024|Pitfalls and evaluation|Cinelli, C., Forney, A., Pearl, J. (2024). A crash course in good and bad controls. <i>Sociological Methods & Research</i> 53(3), 1071–1104. <a href="https://doi.org/10.1177/00491241221099552">doi:10.1177/00491241221099552</a>
+vanderweele2017|Pitfalls and evaluation|VanderWeele, T. J., Ding, P. (2017). Sensitivity analysis in observational research: Introducing the E-value. <i>Annals of Internal Medicine</i> 167(4), 268–274. <a href="https://doi.org/10.7326/M16-2607">doi:10.7326/M16-2607</a>
+gutierrez2017|Pitfalls and evaluation|Gutierrez, P., Gérardy, J.-Y. (2017). Causal inference and uplift modelling: A review of the literature. <i>Proceedings of Machine Learning Research</i> 67, 1–13.
+schuler2018|Pitfalls and evaluation|Schuler, A., Baiocchi, M., Tibshirani, R., Shah, N. (2018). A comparison of methods for model selection when estimating individual treatment effects. arXiv:1804.05146.
+dorie2019|Pitfalls and evaluation|Dorie, V., Hill, J., Shalit, U., Scott, M., Cervone, D. (2019). Automated versus do-it-yourself methods for causal inference: Lessons learned from a data analysis competition. <i>Statistical Science</i> 34(1), 43–68. <a href="https://doi.org/10.1214/18-STS667">doi:10.1214/18-STS667</a>
+petersen2014|Process models and tools|Petersen, M. L., van der Laan, M. J. (2014). Causal models and learning from data: Integrating causal modeling and statistical estimation. <i>Epidemiology</i> 25(3), 418–426. <a href="https://doi.org/10.1097/EDE.0000000000000078">doi:10.1097/EDE.0000000000000078</a>
+hernan2016|Process models and tools|Hernán, M. A., Robins, J. M. (2016). Using big data to emulate a target trial when a randomized trial is not available. <i>American Journal of Epidemiology</i> 183(8), 758–764. <a href="https://doi.org/10.1093/aje/kwv254">doi:10.1093/aje/kwv254</a>
+textor2016|Process models and tools|Textor, J., van der Zander, B., Gilthorpe, M. S., Liśkiewicz, M., Ellison, G. T. H. (2016). Robust causal inference using directed acyclic graphs: the R package dagitty. <i>International Journal of Epidemiology</i> 45(6), 1887–1894. <a href="https://doi.org/10.1093/ije/dyw341">doi:10.1093/ije/dyw341</a>. Online: <a href="https://www.dagitty.net">dagitty.net</a>
+sharma2020|Process models and tools|Sharma, A., Kiciman, E. (2020). DoWhy: An end-to-end library for causal inference. arXiv:2011.04216. <a href="https://www.pywhy.org/dowhy/">pywhy.org/dowhy</a>
+econml|Process models and tools|PyWhy EconML: Library Flow Chart (decision tree for choosing an estimator). <a href="https://www.pywhy.org/EconML/spec/flowchart.html">pywhy.org/EconML/spec/flowchart.html</a>
+', sep = "|", quote = "", strip.white = TRUE, encoding = "UTF-8")
+cite <- function(...) {
+  k <- c(...); n <- match(k, refs$key); stopifnot(!anyNA(n))
+  paste0("[", paste0('<a href="#ref-', k, '">', n, "</a>", collapse = ", "), "]")
+}
+```
+
+```{r facts}
+# Population quantities from one very large sample per case (n = 200,000)
+N <- 2e5
+d2 <- dgp_confounded(N, 1)$data
+naive2 <- with(d2, mean(Y[T == 1]) - mean(Y[T == 0]))
+dx2 <- with(d2, mean(X1[T == 1]) - mean(X1[T == 0]))
+d3 <- dgp_nonlinear_confounding(N, 1)$data
+dsq3 <- with(d3, mean(X1[T == 1]^2) - mean(X1[T == 0]^2))
+lm3 <- coef(lm(Y ~ T + X1 + X2, d3))[["T"]]
+d4 <- dgp_mediator(N, 1)$data
+b4 <- coef(lm(Y ~ T + X1 + M, d4))[["T"]]
+d5 <- dgp_unobserved(N, 1)$data
+naive5 <- with(d5, mean(Y[T == 1]) - mean(Y[T == 0]))
+pt5 <- tapply(d5$T, d5$Z, mean)
+wald5 <- with(d5, (mean(Y[Z == 1]) - mean(Y[Z == 0])) / (mean(T[Z == 1]) - mean(T[Z == 0])))
+d9 <- dgp_obs_het(N, 1)$data
+dsq9 <- with(d9, mean(X1[T == 1]^2) - mean(X1[T == 0]^2))
+lm9 <- coef(lm(Y ~ T * X2 + X1, d9))
+d7 <- dgp_risk_vs_uplift(N, 1)
+xg <- seq(-3, 3, 0.01)
+tau7 <- plogis(0.5 - 1.5 * xg + 1.5 * exp(-xg^2 / (2 * 0.4^2))) - plogis(0.5 - 1.5 * xg)
+true_ate <- vapply(cases, function(cs) mean(cs$dgp(N, 1)$tau), 0)
+```
+
+# Summary
+
+**Who this is for:** Data scientists and analysts who need to estimate what an intervention does (a call, a discount, a campaign) and want to know when causal ML methods are worth using over LM, GLM, and GBM. The basis is nine simulations with a known true effect, each with `r n_reps` repetitions.
+
+**The five most important findings**
+
+1. **Data first, algorithm second.** If the model contains a wrong variable or omits an important influencing factor, all methods are equally wrong, including the most flexible ones. Only domain knowledge or an instrument helps here (Cases 4, 5).
+2. **For the average effect, causal ML wins only when influencing factors act nonlinearly.** In that case the LM is clearly biased and Double ML is almost right. The difference comes from the construction principle (first adjust, then estimate), not from a particular algorithm (Case 3).
+3. **A risk model is not an effect model.** Calling the customers with the highest cancellation risk achieves less than a random selection, because precisely these customers are hardly retainable any more (Case 7).
+4. **The correct ranking is easier than the correct magnitude.** A simple GLM can select the right units and still misstate the size of the effect (Case 9).
+5. **The causal forest pays off when the size of the effect per unit matters and its form is unknown** (Cases 8, 9). In simple worlds, a well-specified GLM is better (Case 6).
+
+<div class="box">
+
+**How to read this report?**
+
+- **Choose a method:** Guide (next section), with two decision trees and a table.
+- **Understand the methods:** Methodology, with terms, formulas, strengths and weaknesses, and the question of how to check without a known effect.
+- **Verify the evidence:** Simulation, with nine cases, each with data, results, and a lesson.
+- The numbers [n] in the text refer to the references at the end.
+
+</div>
+
+# Guide: Which Method When?
+
+Work through the steps from top to bottom. Stop at the first point where the answer is &ldquo;not possible&rdquo;: no algorithm decides steps 1&ndash;3; only step 4 chooses the method. &ldquo;Unit&rdquo; stands for anything that is treated (customer, person, contract, branch); the examples in the cases are set at a fictional online fitness subscription service (an app with training plans and classes).
+
+The terms used in the guide:
+
+- **A/B test:** Who is treated was determined at random (technical term: randomized). Treated and untreated units are therefore comparable.
+- **No random assignment** (called &ldquo;non-random&rdquo; for short in the table): The treatment followed rules or judgments; the data simply accumulated (technical term: observational data). Treated and untreated units already differ beforehand.
+- **Influencing variable (confounder):** A variable that influences who is treated **and** the outcome. *Measured* means it is in the data. *Not measured:* It is missing, and no algorithm can replace it.
+- **Instrument:** A random nudge that shifts the treatment but affects the outcome only through it (e.g. a randomly sent invitation). Allows an estimate even though a confounder is missing.
+- **Average:** A single effect for all units together (technical term: ATE). Answer to &ldquo;Does the intervention work on average?&rdquo;.
+- **Ranking (targeting):** Deciding **whom** to treat, e.g. the 30% with the largest effect. Only who comes first matters; a model may over- or underestimate the effect by the same amount for everyone.
+- **Effect per unit (CATE):** The exact **size** of the effect for each unit, e.g. to weigh costs and benefits per unit. Stricter than the ranking: A model can rank correctly and still estimate the size wrongly (Case 9).
+
+```{r flow, fig.width=11, fig.height=5.5}
+n1 <- "1 Effect or\nrisk only?"; n2 <- "2 A/B test?"; n3 <- "3 Confounders\nmeasured?"
+n4 <- "3 Overlap\nsufficient?"; n5 <- "3 Valid\ninstrument?"; n6 <- "4 Choose method"
+gbm <- "Pure GBM\n(Case 7)"; pe <- "Restrict\npopulation"; iv <- "2SLS /\nIV forest"; stp <- "No causal\nstatement\n(except DiD/RDD)"
+fl <- data.frame(
+  name = c(n1, gbm, n2, n3, n5, iv, stp, n4, pe, n6),
+  x = c(3, 0, 3, 6, 9.4, 8, 11.2, 4.5, 5.5, 2), y = c(5, 4, 4, 3, 2, 1, 0.75, 2, 1, 0),
+  role = c("Treatment", "Instrument", "Treatment", "Treatment", "Treatment", "Instrument", "Outcome",
+           "Treatment", "Covariate", "Instrument"))
+draw_dag(fl, data.frame(
+  from = c(n1, n1, n2, n2, n3, n3, n5, n5, n4, n4, pe),
+  to = c(gbm, n2, n6, n3, n4, n5, iv, stp, n6, pe, n6),
+  label = c("risk only", "effect", "yes", "no", "yes", "no", "yes", "no", "yes", "no", NA))) +
+  coord_cartesian(xlim = c(-1.2, 12.6), ylim = c(-0.4, 5.4)) + guides(fill = "none")
+```
+
+Blue = question, green = recommendation, red = stop.
+
+## Step 1 &ndash; What is the decision?
+
+```{r step1}
+tbl(data.frame(
+  Question = c("Does the intervention work on average?", "Whom should I treat?",
+            "How large is the effect for this unit? (e.g. for cost-benefit per unit)",
+            "Who will cancel? (without intervention)", "How strongly should I treat? (e.g. discount level)"),
+  `Target quantity` = c("Average (ATE)", "Ranking of units by effect", "Effect per unit (CATE)",
+                 "Risk, no effect", "Dose-response curve"),
+  Next = c("Step 2", "Step 2", "Step 2",
+             paste0("Pure GBM, done. Unsuitable for decisions about interventions (Case 7: top-30% uplift ", v(7, "GBM pure (ignores T)", "top30_uplift"), ", worse than chance)."),
+             "Methodological knowledge, not simulated (see conclusion, continuous treatment)."),
+  check.names = FALSE), align = c("l", "l", "l"))
+```
+
+## Step 2 &ndash; How was the treatment assigned?
+
+- **At random** (A/B test, lottery): Identification is secured, continue with step 4.
+- **By rules or by judgment of the business department** (no random assignment): continue with step 3.
+- **Randomly assigned, but not everyone received the treatment** (e.g. call assigned, customer not reached): The comparison of means by assignment measures the effect of the *assignment*. For the effect of the treatment itself, the assignment serves as an instrument (2SLS, Case 5 `r cite("angrist2009")`). Not simulated.
+
+## Step 3 &ndash; Identification (only without random assignment)
+
+This is where most projects fail, and no algorithm helps.
+
+Three terms decide **which variables belong in the model**. They differ only in where the variable sits in the cause-and-effect picture ($T$ = treatment, $Y$ = outcome, $X$ = the variable in question):
+
+```{r vartypes}
+tbl(data.frame(
+  Term = c("Confounder", "Mediator", "Collider"),
+  Structure = c("\\(T \\leftarrow X \\rightarrow Y\\)", "\\(T \\rightarrow X \\rightarrow Y\\)", "\\(T \\rightarrow X \\leftarrow Y\\)"),
+  `What is it?` = c(
+    "A common cause: \\(X\\) influences who is treated <b>and</b> the outcome. Treated and untreated units therefore already differ before the treatment.",
+    "An intermediate station: \\(T\\) acts on \\(Y\\) <b>through</b> \\(X\\). \\(X\\) only arises after the treatment and carries part of the effect.",
+    "A common consequence: \\(X\\) is influenced by \\(T\\) <b>and</b> by \\(Y\\). \\(X\\) arises after both."),
+  Example = c(
+    "Age: Older customers are more likely to receive a call and, for their own reasons, cancel more or less often.",
+    "Call \\(\\rightarrow\\) customer sets up a training plan \\(\\rightarrow\\) stays. &ldquo;Training plan set up&rdquo; is the mediator.",
+    "Call and cancellation both lead to the customer ending up in the complaint log. &ldquo;In the complaint log&rdquo; is the collider."),
+  `In the model?` = c(
+    "<b>Yes.</b> Otherwise the influence of \\(X\\) is read as an effect of \\(T\\) (bias). For nonlinear influence, also in the right form (Case 2, 3).",
+    "<b>No</b>, if the total effect is of interest. Otherwise the part that runs through \\(X\\) is missing (Case 4).",
+    "<b>No.</b> Otherwise a spurious relationship between \\(T\\) and \\(Y\\) arises. Not simulated as a separate case; same rule as for the mediator."),
+  check.names = FALSE), align = c("l", "l", "l", "l", "l"))
+```
+
+Rule of thumb: **What exists before the treatment and co-determines it belongs in the model. What arises after the treatment does not.** Whether a variable is a confounder or a mediator is not revealed by the data &ndash; it is domain knowledge about the process.
+
+1. **Which variables go into the model?** What exists before the treatment and co-determines it goes in (confounder). What arises after the treatment stays out (mediator, collider). The data do not say which is which; this is domain knowledge. In Case 4 all algorithms are equally biased when the mediator is included. Overview of good and bad control variables: `r cite("cinelli2024")`. Tool: Draw the process as a DAG in DAGitty; the program names the required variables `r cite("textor2016")`.
+2. **Is a confounder missing?** Cannot be proven from the data. Hints come from the placebo test (an outcome that the treatment cannot influence must show effect 0; Case 5) and the E-value (how strong a missing confounder would have to be to explain away the effect) `r cite("vanderweele2017")`. DoWhy runs such tests automatically `r cite("sharma2020")`.
+3. **If one is missing, is there an instrument?** A random nudge that acts only through the treatment. Yes: 2SLS for a constant effect, Instrumental forest for a varying effect (Case 5). Validity cannot be checked from the data. No: **no causal statement.** Label the number as an association, not as an effect. Exception: If before-after data or a threshold exist, see difference-in-differences and regression discontinuity under &ldquo;Further methods (not simulated)&rdquo;.
+4. **Overlap:** Are there treated and untreated units in every group? Check with the propensity histogram (section &ldquo;Overlap diagnostic&rdquo;). Propensities near 0 or 1: restrict the population to the region with overlap. AIPW and other weighting estimators otherwise become unstable (Case 3, &dagger;). The restriction itself is not simulated here.
+
+## Step 4 &ndash; Choose a method
+
+First find the data situation (column 2) and the question (column 3); the terms are defined at the beginning of the guide.
+
+As a decision tree, from top to bottom (blue = question, green = recommendation, red = stop; Var. = variables). It presupposes that step 3 is passed (including overlap) and that the question concerns an effect, not pure risk. With little data (a few hundred units), row 2 of the table applies. The table additionally lists a cross-check and what to avoid:
+
+```{r tree, fig.width=13, fig.height=6}
+q1 <- "A/B test?"; qa <- "What is\nsought?"; qb <- "Confounders\nmeasured?"; qi <- "Valid\ninstrument?"
+qc <- "What is\nsought? "   # same text as qa, different key (non-breaking space)
+a1 <- "Comparison\nof means"; a2 <- "GLM with T x X\n(many vars.:\nS-learner)"; a3 <- "GLM with T x X\n(many vars.:\nCausal forest)"
+b1 <- "2SLS /\nIV forest"; b2 <- "No causal\nstatement\n(except DiD/RDD)"
+c1 <- "Double ML\n(linear:\nLM T + X)"; c2 <- "R- or\nS-learner"; c3 <- "Causal\nforest"
+tree <- data.frame(
+  name = c(q1, qa, qb, a1, a2, a3, qi, b1, b2, qc, c1, c2, c3),
+  x = c(7.9, 2.7, 13.1, 0, 2.7, 5.4, 9.75, 8.4, 11.1, 16.5, 13.8, 16.5, 19.2),
+  y = c(4, 3, 3, 2, 2, 2, 2, 1, 1, 2, 1, 1, 1),
+  role = c("Treatment", "Treatment", "Treatment", "Instrument", "Instrument", "Instrument", "Treatment",
+           "Instrument", "Outcome", "Treatment", "Instrument", "Instrument", "Instrument"))
+draw_dag(tree, data.frame(
+  from = c(q1, q1, qa, qa, qa, qb, qb, qi, qi, qc, qc, qc),
+  to = c(qa, qb, a1, a2, a3, qi, qc, b1, b2, c1, c2, c3),
+  label = c("yes", "no", "Average", "Ranking", "Effect per\nunit", "no", "yes", "yes", "no",
+            "Average", "Ranking", "Effect per\nunit"))) +
+  coord_cartesian(xlim = c(-1.3, 20.5), ylim = c(0.5, 4.5)) + guides(fill = "none")
+```
+
+```{r step4}
+tbl(data.frame(
+  `#` = 1:11,
+  `Data situation` = c(
+    "A/B test",
+    "A/B test, little data (a few hundred)",
+    "A/B test, few variables, simple form plausible",
+    "A/B test, many variables, form unknown",
+    "A/B test, many variables, form unknown",
+    "No randomization; confounders measured, linear",
+    "No randomization; confounders measured, nonlinear or unknown",
+    "No randomization; confounders measured",
+    "No randomization; confounders measured",
+    "No randomization; confounder missing, instrument available",
+    "No randomization; confounder missing, no instrument"),
+  Question = c(
+    "Average",
+    "Ranking or effect per unit",
+    "Ranking or effect per unit",
+    "Ranking",
+    "Effect per unit",
+    "Average",
+    "Average",
+    "Ranking",
+    "Effect per unit",
+    "Average",
+    "Any question about the effect"),
+  Recommendation = c(
+    "Comparison of means. LM (T + X) at most for variance reduction.",
+    paste0("First check whether the effect varies at all. Without a strong prior hypothesis, use the average for everyone (LM T + X, CATE-RMSE ", v(1, "LM/GLM (T + X)", "CATE_RMSE"), " in Case 1)."),
+    paste0("GLM with T x X (CATE-RMSE ", v(6, "LM/GLM (T x X)", "CATE_RMSE"), " vs. causal forest ", v(6, "Causal forest", "CATE_RMSE"), ")."),
+    paste0("S-learner (top-30% uplift ", v(8, "GBM S-learner", "top30_uplift"), " vs. oracle ", f23(summ$oracle_top30[summ$case == case_levels[8]][1]), ")."),
+    paste0("Causal forest (CATE-RMSE ", v(8, "Causal forest", "CATE_RMSE"), " vs. S-learner ", v(8, "GBM S-learner", "CATE_RMSE"), "). Also provides confidence intervals."),
+    "LM (T + X).",
+    "Double ML with a GBM as building block.",
+    paste0("R- or S-learner (top-30% uplift ", v(9, "R-learner (xgboost)", "top30_uplift"), " and ", v(9, "GBM S-learner", "top30_uplift"), ", respectively, vs. oracle ", f23(summ$oracle_top30[summ$case == case_levels[9]][1]), ")."),
+    paste0("Causal forest (ATE bias ", v(9, "Causal forest", "ATE_bias"), ", CATE-RMSE ", v(9, "Causal forest", "CATE_RMSE"), ")."),
+    "2SLS (constant effect) or Instrumental forest (varying effect).",
+    "No causal method. Report the association, E-value as sensitivity analysis. Exception: With before-after data or a threshold, difference-in-differences or regression discontinuity are possible (not simulated)."),
+  `Cross-check` = c(
+    "&ndash;",
+    paste0("Causal forest (", v(1, "Causal forest", "CATE_RMSE"), "): estimates an almost constant effect when the effect is constant"),
+    "S-learner, causal forest",
+    "Causal forest, R-learner (equally good selection)",
+    paste0("R-learner (", v(8, "R-learner (xgboost)", "CATE_RMSE"), ")"),
+    "Double ML",
+    "AIPW, causal forest",
+    "Causal forest",
+    paste0("R-learner (", v(9, "R-learner (xgboost)", "CATE_RMSE"), ")"),
+    "Placebo test (Case 5)",
+    "&ndash;"),
+  `Avoid` = c(
+    "&ndash;",
+    paste0("T-learner and GBM S-learner (CATE-RMSE ", v(1, "GBM T-learner", "CATE_RMSE"), " and ", v(1, "GBM S-learner", "CATE_RMSE"), ", respectively): invent differences from noise"),
+    "Pure risk model (Case 7)",
+    "Double ML and AIPW (only deliver an average), pure risk model",
+    paste0("GLM with T x X (", v(8, "LM/GLM (T x X)", "CATE_RMSE"), ") or with all 2-way interactions (", v(8, "LM/GLM (T x all 2-way X)", "CATE_RMSE"), ")"),
+    "Naive comparison",
+    "LM and S-learner (biased)",
+    "Pure risk model",
+    paste0("LM/GLM (ATE bias ", v(9, "LM/GLM (T x X)", "ATE_bias"), ": ranks correctly, size wrong). AIPW: no result in ", summ$n_failed[summ$case == case_levels[9] & summ$method == "AIPW (causal forest)"], " of ", n_reps, " runs."),
+    "All methods without an instrument",
+    "Any method that outputs an effect number"),
+  Evidence = c("Case 1, 6&ndash;8", "Case 1", "Case 6, 7", "Case 8", "Case 8", "Case 2", "Case 3", "Case 9", "Case 9", "Case 5", "Case 5"),
+  check.names = FALSE), align = c("r", "l", "l", "l", "l", "l", "l"))
+```
+
+## Step 5 &ndash; Check without knowing the truth
+
+- **A/B test:** Qini/uplift curve and calibration on a hold-out dataset are valid.
+- **No random assignment:** R-loss ranks the methods only as long as step 3 holds. In addition, placebo test and overlap histogram.
+- **Agreement of several methods proves nothing:** In Cases 4 and 5 all methods agree and are wrong.
+- **State the uncertainty:** An estimate should come with a confidence interval (Methodology, &ldquo;Confidence intervals&rdquo;). It measures only the random error: If step 3 is violated, even a narrow interval misses the target.
+
+Details in the section &ldquo;Evaluation without knowing the truth&rdquo;.
+
+## Step 6 &ndash; When in doubt
+
+Keep the simplest correct model as the baseline. Adopt the more complex method only if it is clearly better on validated data. In Cases 1, 2 and 6, complexity brings nothing.
+
+<div class="box">
+
+**Not tested** (statements about these are methodological knowledge, not simulation): more than 100 variables with weak heterogeneity, trimming under weak overlap, weak instrument, incomplete compliance, panel/time structures, multiple treatment levels, continuous treatment, and the methods in the section &ldquo;Further methods (not simulated)&rdquo; (e.g. BART, BCF, TMLE).
+
+</div>
+
+## Other decision aids
+
+A fully automatic decision tree that chooses the right method from the data alone does not exist, and cannot exist: Whether a variable is a confounder or a mediator is not in the data (Case 4). Any automation therefore needs a cause-and-effect picture (DAG) based on domain knowledge as input. What does exist:
+
+- **DAGitty** `r cite("textor2016")`: You draw the DAG; the program names the variables that must go into the model, and possible instruments. Automates step 3.1.
+- **DoWhy** `r cite("sharma2020")`: From the DAG through identification and estimation to automatic checks (placebo, random additional confounder, subsamples). Closest to an automatic workflow.
+- **EconML Library Flow Chart** `r cite("econml")`: Decision tree for choosing the estimator, similar to the one in step 4. Additionally asks about compliance and whether the effect depends linearly on the features.
+- **Causal Roadmap** `r cite("petersen2014")` and **Target Trial Emulation** `r cite("hernan2016")`: standardized workflows from epidemiology. You first describe the experiment you would have liked to run, and then check how close the data come to it.
+- **Automatic model selection for CATE** (e.g. <code>causaltune</code> based on EconML): chooses the estimator via R-loss or similar measures. This works only if identification holds (see &ldquo;Evaluation without knowing the truth&rdquo;).
+
+# Methodology
+
+This part describes what is estimated and with which methods, without simulation results: the core idea, the terms, the methods studied with their formulas, and the question of how to check a method on real data (where the true effect is unknown).
+
+## Core idea
+
+LM, GLM, and GBM are normally trained to **predict Y**. CausalML models are built to estimate the **effect of a treatment T on Y**, either on average (ATE) or per unit (CATE). A good prediction model is not automatically a good effect model. Conversely, an effect model is not automatically better when the world is simple.
+
+In real data the true effect is never known. That is why we simulate here: we define the formulas that generate the data ourselves. We therefore know the true effect of every single unit and can measure each method against it exactly.
+
+Classification following Molnar `r cite("molnar2022")`: the report takes the **causal inference** mindset (what causes what?) and uses **supervised learning** (prediction models such as GBM) only as a building block, e.g. in Double ML. Evaluation is **frequentist** (bias and spread over repeated samples). Other mindsets lead to other tools: **Bayesian** to BART and Bayesian causal forest (uncertainty per unit as a posterior), **reinforcement learning** to bandits, which assign the treatment continuously and learn while doing so. That is a different type of data than the one used here. The core message in this language: a good supervised-learning model is not automatically a good causal-inference model. Introductions to the field: `r cite("hernan2020", "chernozhukov2024", "facure2022")`.
+
+## Terms
+
+**Potential outcomes.** Every unit has two possible outcomes: $Y(1)$ if it is treated ($T = 1$) and $Y(0)$ if not ($T = 0$). Only one of them is ever observed. The **individual effect** is $Y(1) - Y(0)$.
+
+```{r glossary}
+tbl(data.frame(
+  Term = c("ATE (Average Treatment Effect)", "CATE (Conditional ATE)", "Treatment \\(T\\)", "Outcome \\(Y\\)",
+           "Confounder", "Mediator", "Collider", "Instrument \\(Z\\)", "Effect modifier", "Noise variable",
+           "Randomization"),
+  Definition = c(
+    "\\(\\text{ATE} = E[Y(1) - Y(0)]\\): effect on average across all units.",
+    "\\(\\tau(x) = E[Y(1) - Y(0) \\mid X = x]\\): effect for units with characteristics \\(x\\). This is the effect &ldquo;per unit&rdquo;.",
+    "The action whose effect we are interested in (call, discount, campaign). Always 0/1 here.",
+    "The outcome the action is supposed to influence. Higher = better.",
+    "Variable that <b>influences both T and Y</b> (\\(T \\leftarrow X \\rightarrow Y\\)). If it is ignored, the comparison of treated vs. untreated mixes the effect of T with the effect of X. <b>Must</b> be in the model, and in the correct functional form.",
+    "Variable <b>on the path</b> from T to Y (\\(T \\rightarrow M \\rightarrow Y\\)); it arises after T. Adjusting for it removes the part of the effect that runs through M. <b>Must not</b> be in the model if the total effect is of interest.",
+    "Variable that is <b>influenced by T and Y</b> (\\(T \\rightarrow C \\leftarrow Y\\)). Adjusting for it creates a spurious relationship between T and Y. <b>Must not</b> be in the model. (Not a separate case here; same rule as for the mediator: nothing that arises after T.)",
+    "Variable that influences T but affects Y <b>only through T</b> (\\(Z \\rightarrow T \\rightarrow Y\\)) and is unrelated to unobserved disturbances. Allows effect estimation despite unobserved confounding.",
+    "Variable on which the <b>size of the effect</b> depends (e.g. the discount only works for price-sensitive customers). Creates heterogeneity: \\(\\tau(x)\\) is not constant.",
+    "Variable with no influence on T or Y. Does not harm systematically, but costs estimation precision.",
+    "T is assigned by chance (coin flip). Then there are no confounders for T, and the simple comparison of means is unbiased.")),
+  align = c("l", "l"))
+```
+
+In the diagrams (DAGs) below, an arrow $A \rightarrow B$ means: &ldquo;A enters the formula of B&rdquo;. Dashed = unobserved variable.
+
+## Methods
+
+All methods receive the training data $(Y, T, X)$ as **input** and return an estimated effect $\hat\tau(x)$ for every test customer as **output**. Exception: the &ldquo;pure&rdquo; GBM, which ignores T and only predicts a risk.
+
+```{r methods}
+tbl(data.frame(
+  Method = c("Naive (diff. in means)", "LM/GLM (T + X)", "LM/GLM (T x X)", "LM/GLM (T x all 2-way X)",
+             "GBM / LightGBM S-learner", "GBM / LightGBM T-learner", "GBM / LightGBM pure (ignores T)",
+             "Causal forest", "Double ML (xgboost)", "R-learner (xgboost)", "AIPW (causal forest)", "2SLS", "Instrumental forest"),
+  Model = c("\\(\\hat\\tau = \\bar Y_{T=1} - \\bar Y_{T=0}\\)",
+            "\\(Y = \\beta_0 + \\tau T + \\beta^\\top X\\)",
+            "\\(Y = \\beta_0 + \\tau_0 T + \\beta^\\top X + T \\cdot \\gamma^\\top X\\)",
+            "like T x X, plus all products \\(X_j X_k\\) and their interaction with T",
+            "\\(\\hat f(X, T)\\) = one GBM with T as a feature; \\(\\hat\\tau(x) = \\hat f(x, 1) - \\hat f(x, 0)\\)",
+            "\\(\\hat f_1\\) on treated, \\(\\hat f_0\\) on untreated; \\(\\hat\\tau(x) = \\hat f_1(x) - \\hat f_0(x)\\)",
+            "\\(\\hat f(X)\\) without T; score = predicted risk \\(-\\hat f(x)\\)",
+            "<code>grf::causal_forest</code>",
+            "Cross-fitting (5 folds): \\(\\hat\\ell(X) \\approx E[Y \\mid X]\\), \\(\\hat m(X) \\approx E[T \\mid X]\\) via xgboost; \\(\\hat\\tau = \\frac{\\sum_i (T_i - \\hat m_i)(Y_i - \\hat\\ell_i)}{\\sum_i (T_i - \\hat m_i)^2}\\)",
+            "Same residuals \\(\\tilde Y, \\tilde T\\) as Double ML; \\(\\hat\\tau(x)\\) = xgboost on \\(\\tilde Y / \\tilde T\\) with weights \\(\\tilde T^2\\)",
+            "<code>grf::average_treatment_effect</code> on the causal forest: \\(\\hat\\tau = \\tfrac{1}{n}\\sum_i \\big[\\hat\\mu_1 - \\hat\\mu_0 + \\tfrac{T_i (Y_i - \\hat\\mu_1)}{\\hat e} - \\tfrac{(1-T_i)(Y_i - \\hat\\mu_0)}{1 - \\hat e}\\big]\\)",
+            "Stage 1: \\(\\hat T\\) = prediction from \\(T \\sim Z + X\\)<br>Stage 2: \\(Y = \\beta_0 + \\tau \\hat T + \\beta^\\top X\\)",
+            "<code>grf::instrumental_forest</code>"),
+  Assumption = c("No confounding (randomization)",
+                 "Effect constant; Y linear in X (logit-linear for binary Y)",
+                 "Effect linear in X",
+                 "Effect quadratic in X",
+                 "No form imposed. Regularization can push the effect of T toward 0.",
+                 "No form imposed. Two separate models, each with half the data: high variance.",
+                 "No effect model. This is how targeting is often done (churn model, then call the highest-risk units).",
+                 "No form imposed. Estimates \\(\\tau(x)\\) directly, adjusted for propensity and baseline (honest trees). Default settings. ATE here = mean of the CATE predictions.",
+                 "Effect constant (or weighted mean); confounders arbitrarily nonlinear. Same xgboost as the S-learner, but T and Y are first residualized on X, so regularization does not bias the effect.",
+                 "No form imposed for \\(\\tau(x)\\); confounders arbitrarily nonlinear. Double ML with a varying effect. Needs overlap: units with propensity near 0/1 contribute little.",
+                 "Doubly robust: correct if the outcome model or the propensity model is correct. Average effect only, no effect per unit.",
+                 "Valid instrument Z; effect constant. Classical IV estimator.",
+                 "Valid instrument Z; effect may depend arbitrarily on X.")),
+  align = c("l", "l", "l"))
+```
+
+xgboost and LightGBM: depth 3, learning rate 0.1, number of rounds via 5-fold CV with early stopping, otherwise library defaults (LightGBM: `num_leaves = 8`, `min_data_in_leaf = 20`).
+
+## Methods in detail
+
+The methods from the S-learner onward, each with the idea, the formula, and the typical weakness. Common notation: $\mu_t(x) = E[Y \mid X = x, T = t]$ is the expected outcome, $e(x) = P(T = 1 \mid X = x)$ the propensity (probability of being treated), and $\hat{\ }$ denotes estimated.
+
+### GBM S-learner (&ldquo;Single&rdquo;)
+
+A single model for all units, with $T$ as one feature among many. The effect is the difference in the prediction when $T$ is set from 0 to 1 and everything else is held fixed.
+
+$$ \hat\tau(x) = \hat f(x, 1) - \hat f(x, 0) $$
+
+*Weakness:* If $T$ has only a small influence, the GBM barely uses it (regularization), and the effect is pushed toward 0. Under strong confounding a residual bias remains (Case 3). Source: `r cite("kunzel2019")`.
+
+### GBM T-learner (&ldquo;Two&rdquo;)
+
+Two separate models: one only on the treated, one only on the untreated. The effect is the difference between the two predictions.
+
+$$ \hat\tau(x) = \hat\mu_1(x) - \hat\mu_0(x) $$
+
+*Weakness:* Each model sees only part of the data, and the two errors add up. With small n or groups of unequal size this is very noisy (Case 1). The X-learner (see &ldquo;Further methods&rdquo;) addresses exactly this. Source: `r cite("kunzel2019")`.
+
+### Pure GBM (ignores $T$)
+
+An ordinary prediction model for $Y$ without $T$, e.g. a churn model. The score is the predicted risk.
+
+$$ \text{Score}(x) = -\hat f(x) \quad\text{with}\quad \hat f(x) \approx E[Y \mid X = x] $$
+
+*Weakness:* It answers &ldquo;who is at risk?&rdquo;, not &ldquo;for whom does the treatment work?&rdquo;. Units with high risk may be unpersuadable (Case 7). On the difference between risk and uplift models: `r cite("gutierrez2017")`.
+
+### Double ML
+
+Two nuisance models predict from $X$ what is to be expected **without** the treatment: the outcome $\ell(x) = E[Y \mid X = x]$ and the assignment $m(x) = E[T \mid X = x]$. What remains is only what $X$ does **not** explain (the residuals). The effect is the slope between the two residuals.
+
+$$ \tilde Y_i = Y_i - \hat\ell(X_i), \qquad \tilde T_i = T_i - \hat m(X_i), \qquad \hat\tau = \frac{\sum_i \tilde T_i \tilde Y_i}{\sum_i \tilde T_i^2} $$
+
+*Cross-fitting:* The nuisance models predict each unit using models that have not seen it (5 folds). Otherwise overfitting would distort the residuals. *Why it works:* Errors in $\hat\ell$ and $\hat m$ enter only as a product, so the form of the confounders can be learned freely without biasing the effect. *Weakness:* a single effect for everyone (the average), no effect per unit. Source: `r cite("chernozhukov2018")`; textbook: `r cite("chernozhukov2024")`.
+
+### R-learner (Double ML with per-unit effect)
+
+The same residuals $\tilde Y, \tilde T$ as in Double ML, but the effect is no longer a single number but a function $\tau(x)$ learned by an arbitrary model. It is chosen so that the residuals of $Y$ are explained as well as possible by $\tau(X_i)\,\tilde T_i$:
+
+$$ \hat\tau(\cdot) = \arg\min_{\tau} \sum_i \big(\tilde Y_i - \tau(X_i)\,\tilde T_i\big)^2 $$
+
+Implemented as a weighted regression: an xgboost predicts $\tilde Y_i / \tilde T_i$ from $X$, with weight $\tilde T_i^2$. *Weakness:* Units with $\tilde T_i \approx 0$ (propensity near 0 or 1) contribute almost nothing; with a constant effect the model learns heterogeneity that does not exist (more variance than Double ML). Source: `r cite("nie2021")`.
+
+### Causal forest
+
+A forest of trees that are split so that the **effect** differs as much as possible between the leaves (not the outcome). For a new unit $x$, the forest counts which training units $x$ often lands in the same leaf with (weight $\alpha_i(x)$) and estimates the effect only from these similar units, again using the residuals as in Double ML:
+
+$$ \hat\tau(x) = \frac{\sum_i \alpha_i(x)\, \tilde T_i \tilde Y_i}{\sum_i \alpha_i(x)\, \tilde T_i^2} $$
+
+*Honest:* One half of the data determines the splits, the other half estimates the effect. This prevents the forest from learning random fluctuations as an effect. *Weakness:* needs a lot of data to find fine differences; with a constant effect or a linear world there is no advantage. Sources: `r cite("wager2018", "athey2019")`; honest trees: `r cite("athey2016")`.
+
+### AIPW (doubly robust)
+
+Combines two models. The outcome model $\hat\mu_t$ predicts both outcomes for every unit. The weighted correction offsets deviations at the units actually observed, with rare cases (small propensity) counting more.
+
+$$ \hat\tau_{\text{AIPW}} = \frac{1}{n} \sum_i \left[ \hat\mu_1(X_i) - \hat\mu_0(X_i) + \frac{T_i\,(Y_i - \hat\mu_1(X_i))}{\hat e(X_i)} - \frac{(1 - T_i)\,(Y_i - \hat\mu_0(X_i))}{1 - \hat e(X_i)} \right] $$
+
+*Doubly robust:* The result is correct if **either** the outcome model **or** the propensity model is correct. *Weakness:* If $\hat e$ is near 0 or 1, the weights $1/\hat e$ explode (Case 3, individual runs fail). Average effect only. Source: `r cite("robins1994")`; TMLE as a more stable variant: `r cite("vanderlaan2011")`.
+
+### 2SLS (instrument $Z$)
+
+If a confounder is unobserved, an instrument $Z$ helps: it shifts $T$ but has no other path to $Y$. Stage 1 isolates the part of $T$ that $Z$ explains. Stage 2 uses only this part, which is free of the unobserved confounder.
+
+$$ \text{Stage 1: } \hat T = \pi_0 + \pi_1 Z + \gamma^\top X \qquad \text{Stage 2: } Y = \beta_0 + \tau\,\hat T + \beta^\top X $$
+
+Without $X$ and with a binary $Z$, this is the Wald estimator: the effect of $Z$ on $Y$, divided by the effect of $Z$ on $T$.
+
+$$ \hat\tau = \frac{E[Y \mid Z = 1] - E[Y \mid Z = 0]}{E[T \mid Z = 1] - E[T \mid Z = 0]} $$
+
+*Weakness:* Whether $Z$ is valid cannot be tested from the data. If $Z$ is weak (barely shifts $T$), the denominator is near 0 and the estimate is very uncertain. Source: `r cite("angrist2009")`.
+
+### Instrumental forest
+
+The same principle as 2SLS, but local as in the causal forest: for each unit $x$, a separate IV estimator is computed from the similar units (weights $\alpha_i(x)$ of the forest). The effect may therefore depend on $X$.
+
+$$ \hat\tau(x) = \frac{\sum_i \alpha_i(x)\,(Y_i - \hat\ell_i)(Z_i - \hat z_i)}{\sum_i \alpha_i(x)\,(T_i - \hat m_i)(Z_i - \hat z_i)} $$
+
+*Weakness:* With a constant effect it is merely noisier than 2SLS (Case 5). Source: `r cite("athey2019")`.
+
+## Strengths and weaknesses by method
+
+Summary of the simulation results per method. Which method fits which situation is given in the guide; here we give the reasons.
+
+```{r guide}
+nf <- function(k, m) summ$n_failed[summ$case == case_levels[k] & summ$method == m]
+orc <- function(k) f23(summ$oracle_top30[summ$case == case_levels[k]][1])
+tbl(data.frame(
+  Method = c("Naive (difference in means)", "LM/GLM (T + X)", "LM/GLM with interactions (T x X)",
+             "GBM S-learner", "GBM T-learner", "Pure GBM (ignores T)",
+             "Double ML", "R-learner", "Causal forest", "AIPW", "2SLS / Instrumental forest"),
+  `Good for` = c(
+    "A/B test, average only (Case 1, 6–8). Unbiased, needs no model assumptions.",
+    paste0("Constant effect, linear relationships, all influencing variables measured (Case 1, 2). Hard to beat at small n (Case 1: CATE error ", v(1, "LM/GLM (T + X)", "CATE_RMSE"), "). Transparent, auditable."),
+    paste0("Effect varies in a simple, known form: then better than the causal forest (Case 6: ", v(6, "LM/GLM (T x X)", "CATE_RMSE"), " vs. ", v(6, "Causal forest", "CATE_RMSE"), "). Often ranks correctly even when the magnitude is biased (Case 9: top 30% ", v(9, "LM/GLM (T x X)", "top30_uplift"), " at oracle ", orc(9), ")."),
+    paste0("Ranking in A/B tests and with measured influencing variables (Case 8: ", v(8, "GBM S-learner", "top30_uplift"), " at oracle ", orc(8), "; Case 9: ", v(9, "GBM S-learner", "top30_uplift"), " at ", orc(9), "). Little effort."),
+    "Lots of data in both groups, strongly different structure of treated and untreated.",
+    "Pure risk prediction (who will cancel?). Not for decisions about interventions.",
+    paste0("Average with measured but nonlinearly acting influencing variables (Case 3: bias ", v(3, "Double ML (xgboost)", "ATE_bias"), "). Uses any GBM as a building block, fast, easy to explain."),
+    paste0("Effect per unit with unknown form, even without random assignment (CATE error Case 8: ", v(8, "R-learner (xgboost)", "CATE_RMSE"), ", Case 9: ", v(9, "R-learner (xgboost)", "CATE_RMSE"), "). Ranking on the level of the causal forest."),
+    paste0("Effect per unit with unknown form, many variables, or nonlinear influencing variables (CATE error Case 8: ", v(8, "Causal forest", "CATE_RMSE"), ", Case 9: ", v(9, "Causal forest", "CATE_RMSE"), "). Provides confidence intervals."),
+    paste0("Average with protection against errors in one of the two submodels (Case 3: bias ", v(3, "AIPW (causal forest)", "ATE_bias"), "), as long as overlap holds."),
+    "Missing influencing variable, but a valid instrument (Case 5). 2SLS for a constant effect, instrumental forest for a varying one."),
+  `Bad when` = c(
+    paste0("No random assignment: influencing variables are read as an effect (Case 2: bias ", v(2, "Naive (diff. in means)", "ATE_bias"), ")."),
+    paste0("Influencing variables act nonlinearly (Case 3: bias ", v(3, "LM/GLM (T + X)", "ATE_bias"), ") or the effect varies (Case 8)."),
+    paste0("Many variables with unknown interactions (Case 8: ", v(8, "LM/GLM (T x X)", "CATE_RMSE"), "; with all interactions ", v(8, "LM/GLM (T x all 2-way X)", "CATE_RMSE"), "). Nonlinear influencing variables bias the magnitude (Case 9: bias ", v(9, "LM/GLM (T x X)", "ATE_bias"), ")."),
+    paste0("Magnitude of the effect under strong confounding: regularization biases it (bias Case 3: ", v(3, "GBM S-learner", "ATE_bias"), ", Case 9: ", v(9, "GBM S-learner", "ATE_bias"), ")."),
+    paste0("Small n: two models on half the data each, high variance (Case 1: CATE error ", v(1, "GBM T-learner", "CATE_RMSE"), ")."),
+    paste0("Selection: picks units with high risk instead of high effect (Case 7: top 30% ", v(7, "GBM pure (ignores T)", "top30_uplift"), ", worse than chance)."),
+    paste0("Only an average: CATE error is high by construction when the effect varies (Case 9: ", v(9, "Double ML (xgboost)", "CATE_RMSE"), ")."),
+    paste0("Constant effect: estimates differences that do not exist (Case 1: ", v(1, "R-learner (xgboost)", "CATE_RMSE"), " vs. Double ML ", v(1, "Double ML (xgboost)", "CATE_RMSE"), "). Less accurate than the causal forest (Case 8, 9)."),
+    "Simple form: a suitable GLM is better (Case 6). No advantage over LM at small n (Case 1). Unstable under weak overlap. Default settings, not tuned.",
+    paste0("Weak overlap (propensity near 0/1): weights explode, runs fail (Case 3: ", nf(3, "AIPW (causal forest)"), ", Case 9: ", nf(9, "AIPW (causal forest)"), " of ", n_reps, "). No effect per unit."),
+    "Weak or invalid instrument. Validity cannot be tested from the data (Case 5 assumes it)."),
+  `Evidence in report` = c("Case 1, 2, 6–8", "Case 1, 2, 3, 8", "Case 6, 8, 9", "Case 3, 7, 8, 9", "Case 1",
+                           "Case 7", "Case 3, 9", "Case 1, 8, 9", "Case 1, 6, 8, 9", "Case 3, 9", "Case 5"),
+  check.names = FALSE), align = c("l", "l", "l", "l"))
+```
+
+## Evaluation methods
+
+In real data the true effect is unknown. What can be checked depends on whether the treatment was assigned at random.
+
+**With randomized data** (e.g., a randomly treated share of a campaign), the difference in means is unbiased and serves as the benchmark. On a hold-out set, any effect model can then be checked from the outside:
+
+- **Calibration:** Group units into deciles by predicted effect and compute the actual difference in means within each decile. If prediction and measurement agree, the model is usable (grf: `test_calibration`).
+- **Uplift or Qini curve:** Do the top X % according to the model really have the higher effect? This is the practical version of the top-30% measure in this report `r cite("gutierrez2017")`.
+- **Comparison with chance:** The benefit of selecting by model is compared with random selection and with &ldquo;treat everyone&rdquo;.
+
+A permanently small random share (e.g., 5–10 %) costs something, but it is the only clean answer.
+
+**With observational data** there is no such benchmark. The following tools narrow down errors but prove nothing, and none of them is **recommended across the board**: each works only under its own assumptions or is too noisy to decide on its own. It is best to combine several.
+
+- **Test on your own data (&ldquo;plasmode&rdquo;):** keep the real features $X$ and the real assignment $T$, regenerate $Y$ with an effect of your own choosing, and measure the methods against it. This is what this report does on a small scale, only with the structure of your own data. The result holds only for the chosen effect form, however.
+- **Loss function on hold-out data:** The R-loss `r cite("nie2021", "schuler2018")` (or the analogous DR-loss `r cite("kennedy2023")`) compares effect models without knowing the true effect. It is noisy and depends on the nuisance models $\hat\ell, \hat m$: usable for discarding poor models, but for picking the best one only when the differences are clear (see Simulation: &ldquo;Evaluation without knowing the truth&rdquo;).
+
+    *Step 1: nuisance models.* Two prediction models are learned on the training data, the outcome model $\hat\ell(X) \approx E[Y \mid X]$ and the treatment model $\hat m(X) \approx E[T \mid X]$ (propensity).
+
+    *Step 2: residuals on the hold-out set.* From $Y$ and $T$, subtract what can already be predicted from $X$:
+
+    $$\tilde Y_i = Y_i - \hat\ell(X_i), \qquad \tilde T_i = T_i - \hat m(X_i)$$
+
+    What remains is only the part of $Y$ not explained by $X$ and the part of $T$ that is &ldquo;random&rdquo;. If the treatment acts with $\tau(X)$, then approximately $\tilde Y_i \approx \tau(X_i)\,\tilde T_i + \text{noise}$.
+
+    *Step 3: loss.* An effect model $\hat\tau$ is then judged by how well it fits this relationship:
+
+    $$\text{R-loss}(\hat\tau) = \frac{1}{n}\sum_{i=1}^{n} \Big(\tilde Y_i - \hat\tau(X_i)\,\tilde T_i\Big)^2$$
+
+    Smaller is better. For comparison, $\hat\tau \equiv 0$ (no effect) gives $\frac{1}{n}\sum_i \tilde Y_i^2$. A method is useful only if it falls below this value. The loss needs neither the true effect nor randomization, but it presupposes that $X$ contains all confounders (otherwise Cases 4 and 5).
+- **Agreement of several methods:** Similar results from LM, Double ML and causal forest are reassuring; clear deviations point to a wrong functional form or weak overlap. It is not proof (Cases 4, 5: all equally wrong).
+- **Overlap and balance:** Histogram of the estimated propensity (values near 0 or 1 are a warning sign, Case 3) and comparison of the features of treated and untreated units after weighting. This checks only measured variables.
+- **Placebo test:** The treatment is applied to an outcome it cannot affect (or to a period before it). An &ldquo;effect&rdquo; indicates remaining confounding. It requires a credible placebo outcome, which is rarely available.
+- **Sensitivity analysis (e.g., E-value, Rosenbaum):** How strong would an unobserved confounder have to be to explain the effect away? This yields an order of magnitude, not a decision `r cite("vanderweele2017")`.
+- **Comparison with an experiment:** If a small randomized test exists somewhere, the observational estimator is measured against it. This holds only if population and treatment are similar enough.
+
+**Not testable** is whether all confounders are measured and no mediators are in the model. No quality measure detects this; predictive accuracy can even look good (see &ldquo;Predictive accuracy is not effect accuracy&rdquo;). This is decided by domain knowledge of the process, not by the method.
+
+## Confidence intervals
+
+A confidence interval shows how much an estimate would vary from sample to sample. A 95 % interval is usually the estimate ± 1.96 standard errors (SE). **It measures only random error, not systematic error:** if a wrong variable is in the model or a driver is missing, a narrow interval will surely surround the wrong value (see Simulation, &ldquo;Do the confidence intervals hold?&rdquo;).
+
+```{r ci-methods}
+tbl(data.frame(
+  Method = c("Difference in means", "LM/GLM (T + X)", "Double ML", "AIPW, Causal forest (ATE)", "2SLS",
+             "Causal forest (effect per unit)", "GLM with T x X (effect per unit)", "S-, T-, R-learner with GBM", "BART, BCF"),
+  `How the standard error arises` = c(
+    "\\(\\sqrt{s_1^2/n_1 + s_0^2/n_0}\\) from the variances of the two groups.",
+    "Robust standard error (sandwich, HC1) of the coefficient of T. The default SE from <code>summary()</code> assumes equal variance for all.",
+    paste0("Formula from the residuals: \\(\\sqrt{\\sum_i \\tilde T_i^2 \\hat\\varepsilon_i^2} \\big/ \\sum_i \\tilde T_i^2\\) with \\(\\hat\\varepsilon_i = \\tilde Y_i - \\hat\\tau \\tilde T_i\\). Valid despite ML nuisance models, because cross-fitting and orthogonalization make their errors harmless ", cite("chernozhukov2018"), "."),
+    paste0("Standard deviation of the per-unit AIPW scores, divided by \\(\\sqrt{n}\\) ", cite("athey2019"), "."),
+    paste0("IV standard error; the residuals are computed with the actual T, not with the prediction from stage 1 ", cite("angrist2009"), "."),
+    paste0("Variance per unit from the forest (valid only with honest trees) ", cite("wager2018"), ". Pointwise: the interval holds for one unit, not for all simultaneously."),
+    "Delta method from the covariance matrix of the coefficients.",
+    "No formula. Bootstrap: draw units with replacement and re-estimate the whole pipeline. Expensive, and captures only the variance, not the regularization bias.",
+    paste0("Credible interval directly from the posterior ", cite("hill2011"), ".")),
+  `In R` = c("<code>t.test(Y ~ T)</code>", "<code>lmtest::coeftest(m, vcov = sandwich::vcovHC)</code>",
+             "<code>DoubleML</code> package", "<code>grf::average_treatment_effect(cf)</code>",
+             "<code>ivreg::ivreg</code>", "<code>predict(cf, X, estimate.variance = TRUE)</code>",
+             "<code>marginaleffects::comparisons()</code>", "own loop or <code>boot</code>",
+             "<code>bartCause</code>, <code>bcf</code>"),
+  `Simulated here` = c("yes", "yes (continuous Y only)", "yes", "yes (AIPW)", "yes", "no", "no", "no", "no"),
+  check.names = FALSE), align = c("l", "l", "l", "l"))
+```
+
+**Often more useful for decisions than an interval per unit:** the interval for a group, e.g., the 30 % with the largest estimated effect. To obtain it, estimate the model on training data, select the group on hold-out data, and estimate the effect there: in an A/B test as the difference in means within the group, without random assignment as the mean of the group's AIPW scores (SE = standard deviation / $\sqrt{n}$). Because selection and estimation happen on separate data, the interval is honest.
+
+**When the standard errors are too small:** with clustered data (several observations per customer or per branch: cluster-robust SE or bootstrap whole groups), with time series and panels (block bootstrap), with weak overlap (AIPW SE unstable) and with a weak instrument (2SLS SE unreliable).
+
+## Further methods (not simulated)
+
+The simulated methods cover the most common families, but not all. The table maps each further method to a place in the guide: the column &ldquo;Alternative to&rdquo; names the simulated method it can replace, and the row of the table in Step 4. Most change only the **estimation**. Two intervene earlier: difference-in-differences and regression discontinuity make estimation possible even when a driver is missing, and causal discovery helps with the choice of variables. Everything in the table is literature knowledge, **not tested** here. With a wrong choice of variables (Step 3), the estimators fail just like the simulated ones.
+
+```{r more-methods}
+tbl(data.frame(
+  Method = c("Causal discovery (e.g., PC algorithm)",
+             "Difference-in-differences, synthetic control, regression discontinuity",
+             "Matching, weighting (IPW), entropy balancing", "TMLE with SuperLearner",
+             "X-learner", "DR-learner", "BART", "Bayesian causal forest (BCF)",
+             "Policy tree", "Neural networks (TARNet, Dragonnet)"),
+  `Alternative to` = c(
+    "No estimation method. Helps with Step 3.1 (which variables go into the model).",
+    "The stop &ldquo;No causal statement&rdquo; (row 11), if before/after data or a threshold exist.",
+    "LM (T + X) and Double ML for the average effect without randomization (rows 6, 7).",
+    "Double ML and AIPW for the average effect without randomization (row 7).",
+    "S-learner and GLM with T x X in A/B tests (rows 3, 4).",
+    "R-learner (rows 5, 8, 9).",
+    "Causal forest and S-learner (rows 4, 5, 8, 9).",
+    "Causal forest without randomization (row 9).",
+    "None, but a step afterwards: turns an estimate (e.g., causal forest, rows 4, 8) into an explainable rule.",
+    "S-, T- and R-learner when the features are images or text (rows 4, 5)."),
+  Idea = c(
+    "Estimates the DAG from the data.",
+    "Identification via time courses (before/after, control group over time) or via a threshold (e.g., student discount up to age 25), instead of via measured drivers.",
+    "First make treated and untreated units comparable (form pairs or weight), then simply compare.",
+    "Doubly robust like AIPW, with an additional correction step (&ldquo;targeting&rdquo;); ensemble of many models as a building block.",
+    "T-learner whose errors are corrected with the data of the respective other group and weighted by the propensity.",
+    "Per-unit AIPW scores as the target, with any ML model fitted on them.",
+    "Sum of many small trees with a prior (Bayesian). Provides an uncertainty for each per-unit effect.",
+    "BART with separate models for baseline and effect, propensity as an additional feature. The effect part is regularized more strongly toward &ldquo;constant&rdquo;.",
+    "Learns a rule &ldquo;whom to treat&rdquo; directly as a shallow tree.",
+    "Shared representation of the features, two outputs for treated / untreated."),
+  `When to prefer?` = c(
+    "Only exploratory, to check domain knowledge. It does not replace it: whether a variable is a confounder or a mediator (Case 4) often cannot be determined from observational data.",
+    "When a driver is missing and no instrument is available, but time or threshold data are. Own assumptions (e.g., parallel trends).",
+    "When traceability matters: balance tables show directly whether the groups are comparable. Often more convincing for a specialist audience.",
+    "When AIPW fails because of extreme propensities (Cases 3, 9 &dagger;).",
+    "Very unequally sized groups (e.g., 5 % treated).",
+    "More robust than the R-learner if one of the nuisance models is wrong. Also unstable with weak overlap.",
+    paste0("Small to medium n, uncertainty per unit required. Performed very well in a large methods competition ", cite("dorie2019"), "."),
+    "Strong confounding and varying effect (as in Case 9).",
+    "When the rule must be explainable (e.g., for a business department or a regulator).",
+    "With tabular data as here, usually no advantage over trees."),
+  `R package` = c("<code>pcalg</code>", "<code>did</code>, <code>Synth</code>, <code>rdrobust</code>, <code>CausalImpact</code>",
+                  "<code>MatchIt</code>, <code>WeightIt</code>", "<code>tmle</code>, <code>SuperLearner</code>",
+                  "<code>causalToolbox</code> (GitHub)", "a few lines based on xgboost",
+                  "<code>bartCause</code>, <code>dbarts</code>", "<code>bcf</code>", "<code>policytree</code>",
+                  "Python (e.g., <code>catenets</code>)"),
+  Source = c(cite("pearl2016"), cite("angrist2009"), cite("hernan2020"), cite("vanderlaan2011"), cite("kunzel2019"),
+             cite("kennedy2023"), cite("hill2011"), cite("hahn2020"), cite("athey2021"), cite("chernozhukov2024")),
+  check.names = FALSE), align = c("l", "l", "l", "l", "l", "l"))
+```
+
+# Simulation
+
+Here the methods are measured on nine simulated worlds in which the true effect is known. First the setup, then the cases in four blocks, then the overall comparison and the conclusion.
+
+## Setup
+
+### How are methods scored?
+
+For each case, a training dataset with new random numbers is generated `r n_reps` times. Each method is trained on it and compared with the known true effect $\tau_i$ on a separate test dataset (n = 5000).
+
+```{r metrics}
+tbl(data.frame(
+  Metric = c("ATE bias", "ATE SD", "CATE RMSE", "Y prediction RMSE", "Top-30% uplift"),
+  Formula = c("\\(\\overline{\\hat\\tau} - \\overline{\\tau}\\), averaged over simulations",
+              "Standard deviation of the estimated ATE over simulations",
+              "\\(\\sqrt{\\tfrac{1}{n}\\sum_i (\\hat\\tau_i - \\tau_i)^2}\\)",
+              "\\(\\sqrt{\\tfrac{1}{n}\\sum_i (Y_i - \\hat Y_i)^2}\\), \\(\\hat Y_i\\) = prediction at the actual \\(T_i\\)",
+              "\\(\\tfrac{1}{|S|}\\sum_{i \\in S} \\tau_i\\), \\(S\\) = 30 % with the highest model score"),
+  Meaning = c("Systematic error in the average effect. 0 = perfect.",
+              "How strongly the estimate varies from dataset to dataset. Small = stable.",
+              "Typical error of the effect per customer. 0 = perfect. With a constant effect, almost the same as |ATE error|.",
+              "Classical predictive accuracy (for binary Y: square root of the Brier score). Not available for forests and IV estimators.",
+              "True mean effect among the customers the model would treat. Higher = better; compare with perfect selection (oracle). Only when the effect varies.")),
+  align = c("l", "l", "l"))
+```
+
+
+**What this simulation can and cannot show.** The nine worlds are deliberately simple and chosen by the author, each to make one mechanism visible. The methods run with little tuning (xgboost and LightGBM with depth 3 and number of rounds chosen by cross-validation, grf with default settings). The ranking of the methods therefore holds for these worlds, not in general; what transfers are the mechanisms, that is, why a method fails. Every number is a mean over `r n_reps` repetitions, and the result tables report the Monte Carlo standard error. Differences below about twice that are to be read as equally good. All methods run on the same datasets, so differences between them are more precise than the individual means.
+
+### Overview of the cases
+
+The cases are arranged in four blocks. **A** shows the simple world. **B** asks whether the effect can be estimated at all with the available variables (identification) – there, usually no algorithm helps, but knowledge about the variables does. **C** asks how flexible the model must be when the effect varies from customer to customer (estimation). **D** combines both: observational data with confounding *and* a varying effect.
+
+```{r overview}
+blocks <- c(A = "A Simple world", B = "B Which variables?", C = "C How flexible?", D = "D Both together")
+tbl(data.frame(
+  Block = blocks[vapply(cases, `[[`, "", "block")],
+  Case = case_levels,
+  n = vapply(cases, `[[`, 0, "n"),
+  Variables = vapply(cases, `[[`, 0, "p"),
+  Setting = vapply(cases, `[[`, "", "setting"),
+  `True effect` = vapply(cases, `[[`, "", "truth"),
+  `True ATE` = f2(true_ate),
+  check.names = FALSE), align = c("l", "l", "r", "r", "l", "l", "r"))
+```
+
+Every case follows the same structure: story → DAG → formulas that generate the data → model input → true effect → why simple methods fail → correct estimation → results → lesson.
+
+## A – Simple world
+
+<div class="block">Before turning to pitfalls: what happens when the world is simple? Then the simplest correct model should win, and any additional flexibility only costs.</div>
+
+### Case 1 – Small n, constant effect
+
+**Story.** A pilot trial with only 200 customers, randomized. The world is linear and the effect is the same for everyone.
+
+```{r dag1, fig.width=7, fig.height=2.6}
+draw_dag(data.frame(name = c("T", "Y", "X1", "X2", "X3 noise"),
+                    x = c(-1.6, 1.6, 0, 1.2, 2.6), y = c(0, 0, 1, 1, 1),
+                    role = c("Treatment", "Outcome", "Covariate", "Covariate", "Covariate")),
+         data.frame(from = c("T", "X1", "X2"), to = c("Y", "Y", "Y")))
+```
+
+**Data generation** (n = 200, randomized):
+
+$$
+\begin{aligned}
+X_1, X_2, X_3 &\sim N(0, 1), \qquad T \sim \text{Bernoulli}(0.5) \\
+Y &= 1 + X_1 + 0.5\, X_2 + 1 \cdot T + \varepsilon, \quad \varepsilon \sim N(0, 1.5^2)
+\end{aligned}
+$$
+
+**Model input:** $Y, T, X_1, X_2, X_3$.
+
+**True effect:** $\tau(x) = 1$ for everyone, ATE = 1.
+
+<div class="box">**Correct estimation:** `lm(Y ~ T + X1 + X2 + X3)`. The covariates are not needed against bias (randomized), but they reduce the noise and thus the variance.</div>
+
+**Results:**
+
+```{r res1}
+result_table(summ, case_levels[1])
+```
+
+```{r res1p, fig.height=plot_h(1)}
+result_plots(res, case_levels[1])
+```
+
+<div class="lesson">**Lesson:** With a simple effect and little data, the simplest model wins (LM, CATE-RMSE `r v(1, "LM/GLM (T + X)", "CATE_RMSE")`). Flexibility costs variance (T x X: `r v(1, "LM/GLM (T x X)", "CATE_RMSE")`, T-learner: `r v(1, "GBM T-learner", "CATE_RMSE")`) or bias: the S-learner pushes the effect toward 0 (ATE bias `r v(1, "GBM S-learner", "ATE_bias")`), because with little data T is rarely chosen for splits. The causal forest is robust (`r v(1, "Causal forest", "CATE_RMSE")`) but adds nothing. The pure ATE estimators Double ML (`r v(1, "Double ML (xgboost)", "CATE_RMSE")`) and AIPW (`r v(1, "AIPW (causal forest)", "CATE_RMSE")`) are on par with the LM; the differences are smaller than the spread across simulations.</div>
+
+## B – Which variables belong in the model?
+
+<div class="block">In this block the effect is constant: there is no heterogeneity, only the question of whether the average effect is estimated correctly. The order is: confounders must be included (Case 2), and in the right form (Case 3). Variables that arise after T must not be included (Case 4). What is not measured cannot be replaced by any model (Case 5).</div>
+
+### Case 2 – Confounding, linear
+
+**Story.** Customer service preferentially calls dissatisfied customers (T = call). But dissatisfied customers also have a lower satisfaction score Y three months later even without a call. Prior satisfaction (X1) is therefore a **confounder**: it determines who is called, and it determines Y.
+
+```{r dag2, fig.width=7, fig.height=2.6}
+draw_dag(data.frame(name = c("X1 prior satisfaction", "T call", "Y satisfaction afterwards", "X2 noise"),
+                    x = c(0, -1.6, 1.6, 2.6), y = c(1, 0, 0, 1),
+                    role = c("Confounder", "Treatment", "Outcome", "Covariate")),
+         data.frame(from = c("X1 prior satisfaction", "X1 prior satisfaction", "T call"),
+                    to = c("T call", "Y satisfaction afterwards", "Y satisfaction afterwards")))
+```
+
+**Data generation** (n = 1000, observational data):
+
+$$
+\begin{aligned}
+X_1, X_2 &\sim N(0, 1) \\
+P(T = 1 \mid X_1) &= \text{logit}^{-1}(-1.2\, X_1) \quad \text{(the less satisfied, the more likely a call)} \\
+Y &= 10 + 3\, X_1 + 2\, T + \varepsilon, \quad \varepsilon \sim N(0, 1)
+\end{aligned}
+$$
+
+**Model input:** $Y, T, X_1, X_2$ (all observed).
+
+**True effect:** $\tau(x) = 2$ for every customer, so ATE = 2.
+
+**Why the naive comparison is wrong:** $E[Y \mid T{=}1] - E[Y \mid T{=}0] = 2 + 3 \cdot (E[X_1 \mid T{=}1] - E[X_1 \mid T{=}0])$. Called customers are on average `r f2(-dx2)` standard deviations less satisfied, so the naive comparison is ≈ 2 + 3 · (`r f2(dx2)`) = **`r f2(naive2)`**. The call appears to harm, although it helps.
+
+<div class="box">**Correct estimation:** `lm(Y ~ T + X1)` is exactly the true model. The coefficient of T is the effect.</div>
+
+**Results:**
+
+```{r res2}
+result_table(summ, case_levels[2])
+```
+
+```{r res2p, fig.height=plot_h(2)}
+result_plots(res, case_levels[2])
+```
+
+<div class="lesson">**Lesson:** The problem is confounding, not missing ML. If the confounder acts linearly, the LM that includes it is exactly right and the best model (ATE bias `r v(2, "LM/GLM (T + X)", "ATE_bias")`). The causal forest reaches the target (`r v(2, "Causal forest", "ATE_bias")`) but is less accurate per customer. The GBM learners are biased (S-learner `r v(2, "GBM S-learner", "ATE_bias")`), because regularization gives T too little weight as a feature.</div>
+
+### Case 3 – Confounding, nonlinear
+
+**Story.** As in Case 2, but the confounder acts nonlinearly. A motivational call (T) goes preferentially to very young and very old customers (X1 = age, standardized). Precisely these groups also train less without a call (Y = activity score, e.g., training minutes per week). The relationship is **U-shaped**: it depends on $X_1^2$, not on $X_1$.
+
+```{r dag3, fig.width=7, fig.height=2.6}
+draw_dag(data.frame(name = c("X1 age", "T call", "Y activity", "X2"),
+                    x = c(0, -1.6, 1.6, 2.6), y = c(1, 0, 0, 1),
+                    role = c("Confounder", "Treatment", "Outcome", "Covariate")),
+         data.frame(from = c("X1 age", "X1 age", "T call", "X2"),
+                    to = c("T call", "Y activity", "Y activity", "Y activity")))
+```
+
+**Data generation** (n = 1000, observational data):
+
+$$
+\begin{aligned}
+X_1, X_2 &\sim N(0, 1) \\
+P(T = 1 \mid X_1) &= \text{logit}^{-1}(-1 + 1.2\, X_1^2) \quad \text{(young and old customers are more likely to be called)} \\
+Y &= 10 - 1.5\, X_1^2 + X_2 + 1 \cdot T + \varepsilon, \quad \varepsilon \sim N(0, 1)
+\end{aligned}
+$$
+
+**Model input:** $Y, T, X_1, X_2$ (all observed; nothing is missing, only the form is unknown).
+
+**True effect:** $\tau(x) = 1$ for everyone, ATE = 1.
+
+**Why the LM fails even though the confounder is included:** `lm(Y ~ T + X1 + X2)` can only fit a straight line in $X_1$. The U shape is not in $X_1$ but in $X_1^2$, and called customers have on average a `r f2(dsq3)` larger $X_1^2$. The LM attributes this difference to the call: coefficient of T ≈ 1 − 1.5 · `r f2(dsq3)` = **`r f2(lm3)`** (n = 200,000). The call appears to harm.
+
+<div class="box">**Correct estimation:** `lm(Y ~ T + I(X1^2) + X2)` – if you know the form. Without that knowledge: a method that learns the influence of the confounders flexibly and estimates the effect separately from it (causal forest, Double ML).</div>
+
+**Results:**
+
+```{r res3}
+result_table(summ, case_levels[3])
+```
+
+```{r res3p, fig.height=plot_h(3)}
+result_plots(res, case_levels[3])
+```
+
+<div class="lesson">**Lesson:** This is the case in which CausalML clearly wins on the **average effect**. The LM has the confounder in the model and is nevertheless strongly biased (ATE bias `r v(3, "LM/GLM (T + X)", "ATE_bias")`), because the form is wrong. The S-learner learns the U shape but remains biased (`r v(3, "GBM S-learner", "ATE_bias")`), because regularization mixes the effect of T with the influence of X1. **Double ML with the same xgboost** is practically unbiased (`r v(3, "Double ML (xgboost)", "ATE_bias")`): it first adjusts T and Y for X and estimates the effect only afterwards. The causal forest is likewise almost unbiased (`r v(3, "Causal forest", "ATE_bias")`). AIPW suffers from the weak overlap (`r v(3, "AIPW (causal forest)", "ATE_bias")`, no result in 2 of `r n_reps` runs): with propensities close to 1, the weights $1/(1-\hat e)$ become huge. What matters is thus not the learning algorithm but the construction of the estimator. If you know the form, the LM with the right term wins again.</div>
+
+### Case 4 – Bad control (mediator)
+
+**Story.** A campaign (T) is sent out at random. It affects additional revenue Y (booked premium courses) in two ways: directly, and indirectly because customers who received the campaign open the app more often afterwards (M = number of app visits in the following three months). M is in the data and predicts Y extremely well. But M is a **mediator**: it arises only after T and is part of the effect.
+
+```{r dag4, fig.width=7, fig.height=2.6}
+draw_dag(data.frame(name = c("T campaign", "M app visits", "Y revenue", "X1"),
+                    x = c(-1.8, 0, 1.8, 0.9), y = c(0, -1, 0, 1),
+                    role = c("Treatment", "Mediator", "Outcome", "Covariate")),
+         data.frame(from = c("T campaign", "T campaign", "M app visits", "X1", "X1"),
+                    to = c("Y revenue", "M app visits", "Y revenue", "Y revenue", "M app visits")))
+```
+
+**Data generation** (n = 1000, randomized):
+
+$$
+\begin{aligned}
+X_1 &\sim N(0, 1), \qquad T \sim \text{Bernoulli}(0.5) \\
+M &= 0.5\, X_1 + 1 \cdot T + \eta, \quad \eta \sim N(0, 1) \\
+Y &= X_1 + 0.5\, T + 1 \cdot M + \varepsilon, \quad \varepsilon \sim N(0, 1)
+\end{aligned}
+$$
+
+**Model input:** $Y, T, X_1, M$. For comparison, LM and causal forest are also run with $X_1$ only (&ldquo;w/o mediator&rdquo;).
+
+**True effect:** The question &ldquo;Is the campaign worthwhile?&rdquo; refers to the **total effect**: direct 0.5 plus via M 1 · 1 = **1.5** for all customers.
+
+**Why adjusting for M shrinks the effect:** For fixed M, the model compares customers who received the campaign with those who did not at the *same number* of app visits. This cuts off the path through M, and only the direct effect 0.5 remains (simulated with n = 200,000: `r f2(b4)`). Bias = −1.0: two thirds of the effect disappear.
+
+<div class="box">**Correct estimation:** `lm(Y ~ T + X1)` or simply the comparison of means – **without** M. No algorithm can detect this from the data; it follows only from the knowledge that M arises after T.</div>
+
+**Results:**
+
+```{r res4}
+result_table(summ, case_levels[4])
+```
+
+```{r res4p, fig.height=plot_h(4)}
+result_plots(res, case_levels[4])
+```
+
+<div class="lesson">**Lesson:** No algorithm detects a bad control variable. All models with M estimate only the direct effect (LM: ATE bias `r v(4, "LM/GLM (T + X)", "ATE_bias")`, causal forest: `r v(4, "Causal forest", "ATE_bias")`). At the same time they predict Y much better (Y prediction RMSE of the LM `r v(4, "LM/GLM (T + X)", "Y_pred_RMSE")` with M, `r v(4, "LM/GLM (T + X), w/o mediator", "Y_pred_RMSE")` without M): best prediction, wrong effect. In practice this is the most common error of this kind: variables that arise after the intervention do not belong in the effect model.</div>
+
+### Case 5 – Unobserved confounding
+
+**Story.** Customers can voluntarily take part in an 8-week training program (T). More motivated customers (U) are more likely to take part and also train more without the program (Y = activity score). U is not recorded anywhere. As part of an experiment, however, an invitation Z was sent at random, which strongly increases participation. Z is an **instrument**.
+
+```{r dag5, fig.width=7, fig.height=2.6}
+draw_dag(data.frame(name = c("Z invitation", "T participation", "Y activity", "U motivation", "X1"),
+                    x = c(-3.4, -1.2, 1.6, 0.2, 2.6), y = c(0, 0, 0, 1, 1),
+                    role = c("Instrument", "Treatment", "Outcome", "Unobserved", "Covariate")),
+         data.frame(from = c("Z invitation", "T participation", "U motivation", "U motivation", "X1"),
+                    to = c("T participation", "Y activity", "T participation", "Y activity", "Y activity")))
+```
+
+**Data generation** (n = 2000, observational data with randomized invitation):
+
+$$
+\begin{aligned}
+U, X_1 &\sim N(0, 1), \qquad Z \sim \text{Bernoulli}(0.5) \\
+P(T = 1 \mid Z, U) &= \text{logit}^{-1}(-1.5 + 3\, Z + 1.5\, U) \\
+Y &= X_1 + 2\, U + 1 \cdot T + \varepsilon, \quad \varepsilon \sim N(0, 1)
+\end{aligned}
+$$
+
+**Model input:** $Y, T, X_1$ for all standard methods; $Y, T, X_1, Z$ for 2SLS and the instrumental forest. **U is never in the input.**
+
+**True effect:** $\tau(x) = 1$ for everyone, ATE = 1.
+
+**Why all standard methods fail:** Participants are more motivated (higher U). Without U, no model can separate which part of the difference comes from the program and which from U. The naive comparison yields `r f2(naive5)` instead of 1. More flexibility (GBM, causal forest) does not help, because the missing information is not in the data.
+
+**Why the instrument helps:** Z is assigned at random, hence independent of U. It changes the participation rate from `r f2(pt5[1])` to `r f2(pt5[2])` and acts on Y only through T. The difference in Y between invited and non-invited customers, divided by the difference in participation rates, is the effect (Wald estimator): $\frac{E[Y \mid Z=1] - E[Y \mid Z=0]}{E[T \mid Z=1] - E[T \mid Z=0]} \approx$ `r f2(wald5)`. The three conditions: Z affects T (testable), Z is random (here by design), Z acts only through T (**not** testable, an assumption).
+
+<div class="box">**Correct estimation:** 2SLS with instrument Z (`T ~ Z + X1`, then `Y ~ T_hat + X1`). The instrumental forest is only needed if the effect additionally depends on X.</div>
+
+**Results:**
+
+```{r res5}
+result_table(summ, case_levels[5])
+```
+
+```{r res5p, fig.height=plot_h(5)}
+result_plots(res, case_levels[5])
+```
+
+<div class="lesson">**Lesson:** All standard methods, including the causal forest (ATE bias `r v(5, "Causal forest", "ATE_bias")`), are equally strongly biased because U is missing. Only the instrument rescues the estimate. The classical 2SLS regression suffices for this (`r v(5, "2SLS (uses Z)", "ATE_bias")`); with a constant effect the instrumental forest only adds variance (CATE-RMSE `r v(5, "Instrumental forest (uses Z)", "CATE_RMSE")` vs. `r v(5, "2SLS (uses Z)", "CATE_RMSE")`). The advantage is one of design (a good instrument), not of algorithm. The instrument here is strong (participation `r f2(pt5[1])` → `r f2(pt5[2])`); with a weak instrument both IV estimators would be considerably less certain.</div>
+
+## C – When does flexibility pay off?
+
+<div class="block">In this block all data are randomized, so there is no confounding. Instead, the effect varies from customer to customer, and the question is how flexible the model must be to capture this. The order runs from &ldquo;a GLM suffices&rdquo; (Case 6) through &ldquo;modeling T is decisive&rdquo; (Case 7) to &ldquo;without a known form, the causal forest wins&rdquo; (Case 8).</div>
+
+### Case 6 – Linear heterogeneity
+
+**Story.** A discount (T) is assigned at random. It works the more strongly, the more price-sensitive the customer is (X1). Y is revenue. X1 is an **effect modifier**; the effect changes linearly with X1.
+
+```{r dag6, fig.width=7, fig.height=2.6}
+draw_dag(data.frame(name = c("T discount", "Y revenue", "X1 price sensitivity", "X2", "X3"),
+                    x = c(-1.6, 1.6, 0, 1.4, 2.6), y = c(0, 0, 1, 1, 1),
+                    role = c("Treatment", "Outcome", "Effect modifier", "Covariate", "Covariate")),
+         data.frame(from = c("T discount", "X1 price sensitivity", "X2", "X3"),
+                    to = c("Y revenue", "Y revenue", "Y revenue", "Y revenue")))
+```
+
+**Data generation** (n = 2000, randomized):
+
+$$
+\begin{aligned}
+X_1, X_2, X_3 &\sim U(-1, 1), \qquad T \sim \text{Bernoulli}(0.5) \\
+Y &= 2\, X_2 + 2\, X_3 + \tau(X_1)\, T + \varepsilon, \quad \varepsilon \sim N(0, 1.5^2) \\
+\tau(X_1) &= 1 + 1.5\, X_1
+\end{aligned}
+$$
+
+**Model input:** $Y, T, X_1, X_2, X_3$.
+
+**True effect:** between −0.5 ($X_1 = -1$) and 2.5 ($X_1 = 1$), ATE = 1.
+
+<div class="box">**Correct estimation:** `lm(Y ~ T * X1 + X2 + X3)`. The LM with T x X (all variables) is almost exactly that: it has only two superfluous interactions with X2 and X3.</div>
+
+**Results:**
+
+```{r res6}
+result_table(summ, case_levels[6])
+```
+
+```{r res6p, fig.height=plot_h(6)}
+result_plots(res, case_levels[6])
+```
+
+<div class="lesson">**Lesson:** If the effect varies in the way the model assumes, the GLM with interaction wins (CATE-RMSE `r v(6, "LM/GLM (T x X)", "CATE_RMSE")` vs. causal forest `r v(6, "Causal forest", "CATE_RMSE")`). Without the interaction, the LM sees no heterogeneity (`r v(6, "LM/GLM (T + X)", "CATE_RMSE")`). Caveat: in a preliminary test (8 repetitions) with a nonlinear baseline $5 \sin(\pi X_2)$ instead of $2 X_2$, the causal forest was on par with the GLM; the GLM wins only if the rest of the model is also correct. The R-learner (Double ML with xgboost as effect model) lies in between (`r v(6, "R-learner (xgboost)", "CATE_RMSE")`), clearly better than the average-effect estimator Double ML (`r v(6, "Double ML (xgboost)", "CATE_RMSE")`).</div>
+
+### Case 7 – Risk ≠ uplift (binary)
+
+**Story.** Retention calls (T) are assigned at random. Y = 1 means the customer stays. X1 is a cancellation risk score: the higher it is, the more likely the customer is to cancel the subscription. The call works only at medium risk (&ldquo;persuadables&rdquo;). High-risk customers leave anyway, and low-risk customers stay anyway. X1 is both a risk driver and an effect modifier.
+
+```{r dag7, fig.width=7, fig.height=2.6}
+draw_dag(data.frame(name = c("T call", "Y stays (0/1)", "X1 cancellation risk", "X2 noise"),
+                    x = c(-1.6, 1.6, 0, 2.4), y = c(0, 0, 1, 1),
+                    role = c("Treatment", "Outcome", "Effect modifier", "Covariate")),
+         data.frame(from = c("T call", "X1 cancellation risk"), to = c("Y stays (0/1)", "Y stays (0/1)")))
+```
+
+**Data generation** (n = 3000, randomized):
+
+$$
+\begin{aligned}
+X_1, X_2 &\sim N(0, 1), \qquad T \sim \text{Bernoulli}(0.5) \\
+P(Y = 1 \mid T = 0, X) &= \text{logit}^{-1}(0.5 - 1.5\, X_1) \\
+P(Y = 1 \mid T = 1, X) &= \text{logit}^{-1}\big(0.5 - 1.5\, X_1 + 1.5\, e^{-X_1^2 / (2 \cdot 0.4^2)}\big)
+\end{aligned}
+$$
+
+**Model input:** $Y, T, X_1, X_2$.
+
+**True effect** (on the probability scale): $\tau(x) = P(Y{=}1 \mid T{=}1, x) - P(Y{=}1 \mid T{=}0, x)$. It is a bell shape with maximum `r f2(max(tau7))` at $X_1 \approx$ `r f2(xg[which.max(tau7)])` and falls to ≈ 0 for high and low risk. ATE = `r f2(true_ate[7])`.
+
+```{r tau7, fig.width=6, fig.height=2.6}
+ggplot(data.frame(X1 = xg, tau = tau7), aes(X1, tau)) + geom_line(linewidth = 1, colour = "#4361ee") +
+  labs(x = "X1 (cancellation risk; higher = more likely to cancel)", y = "true effect τ(X1)")
+```
+
+**Why the usual approach fails:** A churn model (&ldquo;pure&rdquo; GBM) predicts the risk correctly and selects the 30% with the highest X1. Precisely there the effect is almost 0. This is an assumption of this case: if the effect *increases* with risk instead of lying at medium risk, the risk model works passably.
+
+<div class="box">**Correct estimation:** a logit model with `T * exp(-X1^2/0.32)` – if you know the form. Without knowledge of the form: any model that models T.</div>
+
+**Results:**
+
+```{r res7}
+result_table(summ, case_levels[7])
+```
+
+```{r res7p, fig.height=plot_h(7)}
+result_plots(res, case_levels[7])
+```
+
+<div class="lesson">**Lesson:** This is the most important case for practice. The standard approach (churn model → call the highest risk) achieves an uplift of `r v(7, "GBM pure (ignores T)", "top30_uplift")` and is thus worse than random selection (`r v(7, "Naive (diff. in means)", "top30_uplift")`; Naive = random ranking). What matters is to model T. S-learner (`r v(7, "GBM S-learner", "top30_uplift")`), GLM with interaction (`r v(7, "LM/GLM (T x X)", "top30_uplift")`) and causal forest (`r v(7, "Causal forest", "top30_uplift")`) are all close to the oracle; with only one relevant variable, no complex method is needed.</div>
+
+### Case 8 – Many variables
+
+**Story.** Randomized campaign (T). There are 20 customer features. The campaign works only if two conditions hold simultaneously (X1 > 0 **and** X2 > 0). This is not known in advance. The baseline depends nonlinearly on X3–X6; X7–X20 are noise.
+
+```{r dag8, fig.width=8, fig.height=2.6}
+draw_dag(data.frame(name = c("T campaign", "Y", "X1", "X2", "X3 ... X6", "X7 ... X20 noise"),
+                    x = c(-1.8, 1.8, -0.6, 0.4, 1.6, 3.2), y = c(0, 0, 1, 1, 1, 1),
+                    role = c("Treatment", "Outcome", "Effect modifier", "Effect modifier",
+                             "Covariate", "Covariate")),
+         data.frame(from = c("T campaign", "X1", "X2", "X3 ... X6"), to = c("Y", "Y", "Y", "Y")))
+```
+
+**Data generation** (n = 2000, randomized, 20 variables):
+
+$$
+\begin{aligned}
+X_1, \dots, X_{20} &\sim N(0, 1), \qquad T \sim \text{Bernoulli}(0.5) \\
+Y &= \underbrace{2 \sin(X_3) + X_4 X_5 + X_6}_{\text{baseline}} + \tau(X)\, T + \varepsilon, \quad \varepsilon \sim N(0, 1) \\
+\tau(X) &= 2 \cdot \mathbb{1}\{X_1 > 0 \text{ and } X_2 > 0\}
+\end{aligned}
+$$
+
+**Model input:** $Y, T, X_1, \dots, X_{20}$.
+
+**True effect:** 2 for the quarter of customers with $X_1 > 0$ and $X_2 > 0$, otherwise 0. ATE = 0.5.
+
+**Why it is difficult:** The effect is an interaction of two variables, and which two they are is stated nowhere. A linear T x X cannot represent a &ldquo;corner&rdquo;. The GLM with all two-way interactions can approximate it roughly, but needs about 400 parameters to do so.
+
+<div class="box">**Correct estimation:** `lm(Y ~ sin(X3) + X4:X5 + X6 + T + T:I(X1 > 0 & X2 > 0))` – with knowledge one does not have in practice.</div>
+
+**Results:**
+
+```{r res8}
+result_table(summ, case_levels[8])
+```
+
+```{r res8p, fig.height=plot_h(8)}
+result_plots(res, case_levels[8])
+```
+
+<div class="lesson">**Lesson:** Here flexibility pays off. Linear T x X does not capture the form (CATE-RMSE `r v(8, "LM/GLM (T x X)", "CATE_RMSE")`), and the GLM with all interactions overfits (`r v(8, "LM/GLM (T x all 2-way X)", "CATE_RMSE")`). The causal forest has the smallest CATE error (`r v(8, "Causal forest", "CATE_RMSE")` vs. S-learner `r v(8, "GBM S-learner", "CATE_RMSE")`). When selecting the top 30%, however, the S-learner is equally good (`r v(8, "GBM S-learner", "top30_uplift")` vs. `r v(8, "Causal forest", "top30_uplift")`). The R-learner lies in between in CATE error (`r v(8, "R-learner (xgboost)", "CATE_RMSE")`) and also selects equally well (`r v(8, "R-learner (xgboost)", "top30_uplift")`). Estimating heterogeneity via Double ML thus does not match the causal forest; it is, however, a large gain over pure average-effect Double ML.</div>
+
+## D – Both together
+
+<div class="block">Considering blocks B and C separately is convenient, but practice combines them: an intervention is not assigned at random, and its effect differs from customer to customer. This is the typical situation in targeting from observational data.</div>
+
+### Case 9 – Observational data and varying effect
+
+**Story.** As in Case 3: the motivational call (T) goes preferentially to very young and very old customers (X1 = age), who also train less without a call (activity score Y, U-shaped). In addition, customers benefit to different degrees from the call, depending on a second quantity (X2, e.g., pre-existing conditions). X1 is the **confounder**, X2 the **effect modifier**.
+
+```{r dag9, fig.width=7, fig.height=2.6}
+draw_dag(data.frame(name = c("X1 age", "T call", "Y activity", "X2 modifier"),
+                    x = c(0, -1.6, 1.6, 0), y = c(1, 0, 0, -1),
+                    role = c("Confounder", "Treatment", "Outcome", "Effect modifier")),
+         data.frame(from = c("X1 age", "X1 age", "T call", "X2 modifier", "X2 modifier"),
+                    to = c("T call", "Y activity", "Y activity", "Y activity", "T call")))
+```
+
+**Data generation** (n = 2000, observational data):
+
+$$
+\begin{aligned}
+X_1, X_2 &\sim N(0, 1) \\
+P(T = 1 \mid X_1) &= \text{logit}^{-1}(-1 + 1.2\, X_1^2) \\
+\tau(x) &= 1 + 1.5\, X_2 \\
+Y &= 10 - 1.5\, X_1^2 + X_2 + \tau(x)\, T + \varepsilon, \quad \varepsilon \sim N(0, 1)
+\end{aligned}
+$$
+
+**Model input:** $Y, T, X_1, X_2$ (all observed).
+
+**True effect:** $\tau(x) = 1 + 1.5\, X_2$, ATE = 1.
+
+**Why the GLM fails:** As in Case 3, the U shape is in $X_1^2$, and called customers have a `r f2(dsq9)` larger $X_1^2$. `lm(Y ~ T * X2 + X1)` attributes this to the call: the effect at $X_2 = 0$ is **`r f2(lm9[["T"]])`** instead of 1. The slope in $X_2$, by contrast, is captured correctly by the GLM (`r f2(lm9[["T:X2"]])` instead of 1.5), because $X_2$ is independent of the confounding. The GLM thus ranks customers well but gets the level wrong.
+
+<div class="box">**Correct estimation:** Learn confounding and heterogeneity flexibly at the same time: causal forest or R-learner (Double ML with effect model). With a known form, `lm(Y ~ T * X2 + I(X1^2))` suffices.</div>
+
+**Results:**
+
+```{r res9}
+result_table(summ, case_levels[9])
+```
+
+```{r res9p, fig.height=plot_h(9)}
+result_plots(res, case_levels[9])
+```
+
+<div class="lesson">**Lesson:** Here the **ranking** and the **size** of the effect separate. The GLM with T x X has the wrong level (ATE bias `r v(9, "LM/GLM (T x X)", "ATE_bias")`, CATE-RMSE `r v(9, "LM/GLM (T x X)", "CATE_RMSE")`) but selects almost as well as the oracle selection (top-30% uplift `r v(9, "LM/GLM (T x X)", "top30_uplift")` vs. oracle `r f23(summ$oracle_top30[summ$case == case_levels[9]][1])`), because the bias is the same for all customers. The causal forest is the most accurate (ATE bias `r v(9, "Causal forest", "ATE_bias")`, CATE-RMSE `r v(9, "Causal forest", "CATE_RMSE")`). The R-learner follows (`r v(9, "R-learner (xgboost)", "CATE_RMSE")`), ahead of the S-learner (`r v(9, "GBM S-learner", "CATE_RMSE")`, ATE bias `r v(9, "GBM S-learner", "ATE_bias")`). AIPW fails because of the weak overlap in `r summ$n_failed[summ$case == case_levels[9] & summ$method == "AIPW (causal forest)"]` of `r n_reps` runs. Whoever needs only a ranking gets far with the GLM; whoever computes costs and benefits per customer needs a method that adjusts correctly for the confounding.</div>
+
+## Overall comparison
+
+### CATE error across all cases
+
+**How to read:** The number in each tile is the method's CATE-RMSE, i.e., the typical error per customer (**0 = perfect**). Because the errors lie on very different scales depending on the case (Case 7 measures probabilities, Case 2 score points), the **color** is relative: it shows how much larger the error is than that of the best method in *the same* case. Green = best method in the case, red = at least 4 times the error of the best. Empty = the method does not estimate an effect (pure GBM) or does not appear in the case.
+
+```{r heatmap, fig.height=7.5}
+hm <- subset(summ, !is.na(CATE_RMSE))
+hm$rel <- ave(hm$CATE_RMSE, hm$case, FUN = function(x) x / min(x))
+ggplot(hm, aes(case, method, fill = pmin(rel, 4))) + geom_tile(colour = "white") +
+  geom_text(aes(label = f23(CATE_RMSE)), size = 3.3) +
+  scale_fill_gradientn(colours = c("#2a9d8f", "#e9f5db", "#f4a261", "#e63946"), values = c(0, 0.15, 0.5, 1),
+                       limits = c(1, 4), breaks = 1:4, labels = c("best", "2×", "3×", "≥ 4×"),
+                       name = "Error relative to\nthe best method") +
+  scale_y_discrete(limits = rev(levels(summ$method))) + labs(x = NULL, y = NULL) +
+  theme(axis.text.x = element_text(angle = 20, hjust = 1), panel.grid = element_blank())
+```
+
+### Bias of the average effect
+
+Number = mean ATE error (estimate − truth, **0 = perfect**). Color = magnitude of the error.
+
+```{r heatmap-ate, fig.height=7.5}
+ggplot(summ, aes(case, method, fill = pmin(abs(ATE_bias), 2))) + geom_tile(colour = "white") +
+  geom_text(aes(label = f23(ATE_bias)), size = 3.3) +
+  scale_fill_gradient(low = "#f1faee", high = "#e63946", limits = c(0, 2), name = "|ATE error|") +
+  scale_y_discrete(limits = rev(levels(summ$method))) + labs(x = NULL, y = NULL) +
+  theme(axis.text.x = element_text(angle = 20, hjust = 1), panel.grid = element_blank())
+```
+
+### Predictive accuracy is not effect accuracy
+
+Each point is a method. x-axis: how well it predicts Y; y-axis: how well it estimates the effect per customer. For both, 0 = perfect. If good prediction implied a good effect estimate, the points would lie on a rising line.
+
+```{r pred-vs-effect, fig.height=10}
+pe <- subset(summ, !is.na(CATE_RMSE) & !is.na(Y_pred_RMSE))
+pe$family <- ifelse(grepl("LightGBM", pe$method), "LightGBM",
+             ifelse(grepl("GBM", pe$method), "xgboost", "LM/GLM/Naive"))
+ggplot(pe, aes(Y_pred_RMSE, CATE_RMSE, colour = family)) +
+  geom_point(size = 2.5) +
+  ggrepel::geom_text_repel(aes(label = sub("LM/GLM ", "", sub(" learner| [(].*", "", method))),
+                           size = 3, show.legend = FALSE, max.overlaps = 20) +
+  facet_wrap(~case, scales = "free", ncol = 3) +
+  labs(x = "Y prediction RMSE (predictive accuracy)", y = "CATE-RMSE (effect accuracy)", colour = NULL) +
+  theme(legend.position = "bottom")
+```
+
+In Case 4 (mediator) and Case 3 (nonlinear confounding), good prediction models give a poor effect estimate. The pure GBM predicts Y almost as well as the S-learner but is useless as a targeting model (Cases 7, 8). **LightGBM vs. xgboost:** practically identical in all cases. What matters is the construction (S, T, pure), not the library.
+
+### Where is the causal forest really better?
+
+```{r cf-table}
+cf <- do.call(rbind, lapply(case_levels, function(id) {
+  s <- subset(summ, case == id & !is.na(CATE_RMSE) & !grepl("w/o", method))
+  b <- s[which.min(s$CATE_RMSE), ]
+  o <- subset(s, !method %in% c("Causal forest", "AIPW (causal forest)"))
+  o <- o[which.min(o$CATE_RMSE), ]
+  data.frame(Case = id, `Best method (CATE-RMSE)` = paste0(b$method, " (", f23(b$CATE_RMSE), ")"),
+             `Causal forest` = f23(s$CATE_RMSE[s$method == "Causal forest"]),
+             `Best alternative to the causal forest` = paste0(o$method, " (", f23(o$CATE_RMSE), ")"),
+             check.names = FALSE)
+}))
+tbl(cf, align = c("l", "l", "r", "l"),
+    caption = "Excluding the &ldquo;w/o mediator&rdquo; variants, which solve the problem through domain knowledge. AIPW does not count as an alternative because it builds on the causal forest.")
+```
+
+The causal forest is clearly the best method in **Case 8** (unknown interaction among many variables) and in **Case 9** (observational data with nonlinear confounding and a varying effect; there it is also nearly unbiased for the ATE). There, however, the S-learner and the R-learner deliver the same top-30% selection; the advantage lies in the more accurate **magnitude** of the effect per customer (e.g., for cost-benefit calculations), not in the ranking. In **Case 3** (nonlinear confounding), the causal forest is nearly unbiased, but Double ML with ordinary xgboost estimates the average effect somewhat more accurately still. What wins there is the orthogonalized construction, not the forest.
+
+## Evaluation without knowing the truth
+
+In real data, only the tools from the Methodology section &ldquo;Evaluation methods&rdquo; would be available. Here we know the truth and can check whether these tools would have found the right winner. To this end, they are computed on the same test data as the quality measures above, but without using the true effect.
+
+### R-loss and Qini: Do they find the best method?
+
+```{r rank-eval}
+rank_stats <- function(r, metric, truth, metric_high = FALSE, truth_high = FALSE) {
+  sm <- if (metric_high) -1 else 1; st <- if (truth_high) -1 else 1
+  per <- lapply(split(r, r$rep), function(d) {
+    d <- d[!is.na(d[[metric]]) & !is.na(d[[truth]]), ]
+    if (nrow(d) < 3 || sd(d[[metric]]) == 0 || sd(d[[truth]]) == 0) return(NULL)
+    pick <- which.min(sm * d[[metric]]); best <- which.min(st * d[[truth]])
+    data.frame(rho = cor(sm * d[[metric]], st * d[[truth]], method = "spearman"),
+               hit = pick == best, regret = abs(d[[truth]][pick] - d[[truth]][best]))
+  })
+  per <- do.call(rbind, per)
+  if (is.null(per)) return(c(rho = NA, hit = NA, regret = NA))
+  c(rho = mean(per$rho, na.rm = TRUE), hit = mean(per$hit), regret = mean(per$regret))
+}
+fmt <- function(x, d = 2) ifelse(is.na(x), "&ndash;", formatC(x, format = "f", digits = d))
+rk <- do.call(rbind, lapply(seq_along(cases), function(k) {
+  r <- res[res$case == case_levels[k], ]
+  a <- rank_stats(r, "r_loss", "cate_rmse")
+  het <- !all(is.na(r$policy))
+  b <- if (cases[[k]]$randomized && het) rank_stats(r, "qini", "policy", metric_high = TRUE, truth_high = TRUE)
+       else c(rho = NA, hit = NA, regret = NA)
+  data.frame(Case = case_levels[k],
+             `R-loss: rank correlation` = fmt(a[["rho"]]), `Best found` = fmt(100 * a[["hit"]], 0),
+             `Regret (CATE-RMSE)` = fmt(a[["regret"]]),
+             `Qini: rank correlation` = fmt(b[["rho"]]), `Best found ` = fmt(100 * b[["hit"]], 0),
+             `Regret (top-30% uplift)` = fmt(b[["regret"]]), check.names = FALSE)
+}))
+tbl(rk, align = c("l", rep("r", 6)),
+    caption = "In each simulation, the methods are ranked once by the metric and once by the truth (CATE-RMSE or true top-30% uplift, respectively). Rank correlation: 1 = same order. &ldquo;Best found&rdquo;: share of simulations (in %) in which the metric selects the same method as the truth as the best. Regret: how much worse, according to the truth, the selected method is than the best one. Qini only for randomized cases with a varying effect.")
+```
+
+**Interpretation**
+
+- **Identification holds (Cases 1–3, 6–9):** The R-loss ranks the methods almost like the truth (rank correlation `r rk[6, 2]` in Case 6, `r rk[8, 2]` in Case 8), and anyone choosing by it loses little (regret at most `r max(as.numeric(rk[c(1:3, 6:9), 4]))`). It does not always pick the single best method (Case 2: `r rk[2, 3]` %, Case 7: `r rk[7, 3]` %), because several methods are almost equally good there. The Qini value likewise ranks almost like the truth (Case 8: `r rk[8, 5]`) but rarely names the best method exactly (`r rk[8, 6]` %): causal forest, R-learner and S-learner are too close together. By contrast, pure ATE estimators (Qini around 0) and the pure GBM (Qini below 0, i.e., worse than chance) are reliably screened out.
+- **Identification fails (Cases 4, 5):** The R-loss ranks the methods against the truth (rank correlation `r rk[4, 2]` and `r rk[5, 2]`, respectively) and never selects the right method (regret `r rk[4, 4]` and `r rk[5, 4]`, respectively). It rewards whatever fits the observed residuals, including the biased effect. As with predictive accuracy: a quality measure on observed data does not detect a wrong choice of variables.
+
+### Calibration (Case 8)
+
+```{r calib, fig.height=4.2}
+seed8 <- 1000 * 8 + 1
+tr8 <- dgp_many_vars(cases[[8]]$n, seed8); te8 <- dgp_many_vars(5000, seed8 + 1e6)
+newX8 <- te8$data[setdiff(names(te8$data), c("Y", "T"))]
+cal <- do.call(rbind, lapply(c("LM/GLM (T x X)", "GBM S-learner", "R-learner (xgboost)", "Causal forest"), function(m) {
+  o <- cases[[8]]$methods[[m]](tr8$data, newX8, tr8$family, seed8)
+  cbind(method = m, calib_decile(o$tau, te8$data$Y, te8$data$T))
+}))
+cal$method <- factor(cal$method, levels = unique(cal$method))
+ggplot(cal, aes(pred, obs)) +
+  geom_abline(colour = "grey50", linetype = "dashed") +
+  geom_point(size = 2, colour = "#4361ee") + geom_smooth(method = "lm", se = FALSE, colour = "#e63946", linewidth = 0.6, formula = y ~ x) +
+  facet_wrap(~method, nrow = 1) +
+  labs(x = "Predicted effect (mean per decile)", y = "Observed effect in the decile (difference in means)")
+```
+
+If a point lies on the dashed line, the prediction agrees with the experiment. The calibration slope (red line) summarizes this: 1 = calibrated, > 1 = predictions compressed too much, < 1 = spread too much. Averaged over `r n_reps` simulations in Case 8: causal forest `r f2(mean(res$calib_slope[res$case == case_levels[8] & res$method == "Causal forest"], na.rm = TRUE))`, R-learner `r f2(mean(res$calib_slope[res$case == case_levels[8] & res$method == "R-learner (xgboost)"], na.rm = TRUE))`, S-learner `r f2(mean(res$calib_slope[res$case == case_levels[8] & res$method == "GBM S-learner"], na.rm = TRUE))`, LM T x X `r f2(mean(res$calib_slope[res$case == case_levels[8] & res$method == "LM/GLM (T x X)"], na.rm = TRUE))`. Calibration thus shows not only whether the effect is right but also in which direction a model is off. Constant estimators (Double ML, AIPW) have no spread and cannot be checked this way.
+
+### Overlap diagnostic
+
+```{r overlap, fig.height=2.8}
+ov <- do.call(rbind, lapply(c(2, 3, 6), function(k) {
+  d <- cases[[k]]$dgp(cases[[k]]$n, 2000 + k)$data
+  data.frame(case = factor(case_levels[k], levels = case_levels),
+             e = grf::regression_forest(as.matrix(d[covs(d)]), d$T, seed = 2000 + k)$predictions)
+}))
+ov_share <- tapply(ov$e, ov$case, function(x) mean(x < 0.1 | x > 0.9))
+p3 <- plogis(-1 + 1.2 * d3$X1^2)   # true propensity of case 3 (formula of the DGP), n = 200'000
+true_share3 <- mean(p3 < 0.1 | p3 > 0.9)
+ggplot(ov, aes(e)) + geom_histogram(bins = 30, fill = "#8ecae6", colour = "white") +
+  facet_wrap(~case, nrow = 1, drop = TRUE) + labs(x = "Estimated propensity P(T = 1 | X)", y = "Customers")
+```
+
+In Case 3, `r f2(100 * ov_share[[case_levels[3]]], 1)` % of customers lie outside 0.1–0.9 (Case 2: `r f2(100 * ov_share[[case_levels[2]]], 1)` %, randomized Case 6: `r f2(100 * ov_share[[case_levels[6]]], 1)` %). This is the warning signal that leads to failures in AIPW. If anything, the diagnostic underestimates the problem: the smoothed propensity from the forest does not reach the extremes, while the true propensity lies outside this range for `r f2(100 * true_share3, 1)` % of customers.
+
+### Placebo test and E-value (Case 5)
+
+```{r placebo}
+d5 <- dgp_unobserved(cases[[5]]$n, 5001)
+D5 <- cbind(d5$data, Yp = d5$placebo)
+cf <- function(f, term) { m <- lm(f, D5); c(coef(m)[[term]], confint(m)[term, ]) }
+a <- cf(Y ~ T + X1, "T"); b <- cf(Yp ~ T + X1, "T"); z <- cf(Yp ~ Z + X1, "Z")
+evalue <- function(d) { rr <- exp(0.91 * abs(d)); rr + sqrt(rr * (rr - 1)) }   # VanderWeele & Ding, d = standardised difference
+ev <- evalue(a[1] / sd(D5$Y))
+ci <- function(x) sprintf("%.2f [%.2f; %.2f]", x[1], x[2], x[3])
+tbl(data.frame(
+  Check = c("Effect of T on Y, adjusted for \\(X_1\\) (LM)",
+            "Placebo outcome on T, adjusted for \\(X_1\\)",
+            "Placebo outcome on the instrument Z, adjusted for \\(X_1\\)"),
+  `Estimate [95% CI]` = c(ci(a), ci(b), ci(z)),
+  Interpretation = c("Measured &ldquo;effect&rdquo; (true effect: 1)",
+             "Should be 0, since T does not act on the placebo. Deviation: there is unobserved confounding.",
+             "Should be 0 if Z acts only through T and has nothing to do with the confounder. Consistent with the assumption for the instrument."),
+  check.names = FALSE), align = c("l", "r", "l"),
+  caption = "The placebo outcome has the same confounder (U) as Y but is not influenced by T. In real data, it must first exist.")
+```
+
+The placebo outcome reveals the error: although $T$ has no effect on it, an &ldquo;effect&rdquo; of `r f2(b[1])` results. This almost equals the bias of the effect on $Y$ (`r f2(a[1] - 1)`). The placebo test thus detects the unobserved confounding where R-loss and quality measures fail. The instrument passes the same test (`r f2(z[1])`). The E-value of the measured effect is `r f2(ev, 1)`: an unobserved confounder would need a risk ratio of about `r f2(ev, 1)` with both $T$ and $Y$ to explain it away completely. That sounds like a lot but is in fact the case here ($U$ shifts $T$ and $Y$ strongly). The E-value says how strong a confounder would have to be, not whether it is that strong.
+
+### Agreement of methods
+
+```{r agree}
+ag <- do.call(rbind, lapply(seq_along(cases), function(k) {
+  s <- summ[summ$case == case_levels[k] & !is.na(summ$CATE_RMSE) & !grepl("w/o|uses Z|Naive|pure", summ$method), ]
+  data.frame(Case = case_levels[k], Methods = nrow(s),
+             `Range of the ATE estimates` = f23(diff(range(s$ATE_bias))),
+             `Mean |ATE bias|` = f23(mean(abs(s$ATE_bias))), check.names = FALSE)
+}))
+tbl(ag, align = c("l", "r", "r", "r"),
+    caption = "Excluding naive estimators, pure GBMs, variants using domain knowledge (&ldquo;w/o mediator&rdquo;) and instrument methods. Only methods with an effect per customer or an ATE.")
+```
+
+In Cases 4 and 5, the methods agree with one another (range `r ag[4, 3]` and `r ag[5, 3]`, respectively) and are all off by about `r ag[4, 4]` and `r ag[5, 4]`, respectively. In Case 3, by contrast, the estimates diverge widely (range `r ag[3, 3]`), and here that is a legitimate warning signal. Disagreement therefore points to a problem; agreement proves nothing.
+
+<div class="lesson">**Lesson:** The tools from the Methodology section distinguish good from bad methods as long as identification holds. Whether identification holds (right variables, no missing confounder) is not shown by R-loss, Qini, calibration or agreement of methods. There, placebo tests (for a missing confounder), checks of the instrument and above all domain knowledge help (for the mediator in Case 4 there is no data test).</div>
+
+### Do the confidence intervals hold?
+
+For the methods with a standard formula (see Methodology, &ldquo;Confidence intervals&rdquo;), the 95% interval for the average effect is computed in every run. The table shows in how many of the `r n_reps` runs it contains the true effect. A correct interval should do so in about 95% of runs.
+
+```{r ci-coverage}
+cm <- c("Naive (diff. in means)", "LM/GLM (T + X)", "Double ML (xgboost)", "AIPW (causal forest)", "2SLS (uses Z)")
+cov_of <- function(k, m) summ$ATE_ci_coverage[summ$case == case_levels[k] & summ$method == m]
+pct <- function(x) if (length(x) == 0 || is.na(x)) "&ndash;" else if (x < 0.8) sprintf("<b>%.0f %%</b>", 100 * x) else sprintf("%.0f %%", 100 * x)
+ct <- data.frame(Method = c("Difference in means", "LM (T + X)", "Double ML", "AIPW", "2SLS"), check.names = FALSE)
+for (k in seq_along(case_levels)) ct[[paste("Case", k)]] <- vapply(cm, function(m) pct(cov_of(k, m)), "")
+se_ratio <- with(subset(summ, method %in% cm & !is.na(ATE_se_mean) & abs(ATE_bias) < 2 * ATE_sd), median(ATE_se_mean / ATE_sd))
+tbl(ct, align = c("l", rep("r", length(case_levels))),
+    caption = paste0("Share of runs in which the 95% interval contains the true average effect. Bold = below 80%. ",
+                     "With ", n_reps, " runs, the share fluctuates by about ±7 percentage points even for a correct interval; values between 88 and 100% are compatible with 95%. ",
+                     "&ndash; = no standard error (LM with binary Y in Case 7) or method not in the case."))
+```
+
+<div class="lesson">**Lesson:** Where identification holds, the intervals deliver what they promise (between `r sprintf("%.0f", 100 * min(cov_of(1, "LM/GLM (T + X)"), cov_of(3, "Double ML (xgboost)"), cov_of(7, "AIPW (causal forest)"), cov_of(9, "Double ML (xgboost)")))` and 100%), also for Double ML and AIPW with ML nuisance models. The estimated standard errors match the actual spread across runs (a median of `r sprintf("%.2f", se_ratio)` times it, i.e., if anything slightly conservative). Where identification fails, **not a single** interval contains the true effect: the difference in means without random assignment (Cases 2, 3, 9), the LM with nonlinear predictors (Cases 3, 9), all adjusted methods with a mediator (Case 4), and all methods without an instrument when a variable is missing (Case 5). In Case 4, it is the simple difference in means that is correct, precisely because it does not use the mediator. A narrow interval is therefore no sign that the estimate is right.</div>
+
+## Conclusion
+
+### When does CausalML pay off?
+
+CausalML methods pay off when predictors act nonlinearly (Cases 3, 9), when the effect depends on many variables in an unknown form and its magnitude per unit matters (Cases 8, 9), and, for selection, only when the model includes the treatment (Case 7). They bring no advantage with small samples and in linear worlds (Cases 1, 2, 6), with a wrong choice of variables (Case 4), and with a missing variable without an instrument (Case 5). How to choose a method from this is explained in the guide; what has not been tested is listed in the box at the end of the guide.
+
+### Continuous treatment
+
+Example: discount size instead of discount yes/no. In all cases, $T$ is binary; what follows is methodological knowledge, not a simulation. The rules on confounder, mediator and collider apply unchanged. The question changes: the target is a dose-response curve or the slope $\partial Y / \partial t$, and &ldquo;whom to treat?&rdquo; becomes &ldquo;how much?&rdquo;. LM/GLM, S-learner, Double ML (residuals $T - \hat m(X)$ instead of the propensity), causal forest and 2SLS can be carried over to continuous $T$; the T-learner and the difference in means cannot, and AIPW only via a generalized propensity density (unstable with thin overlap). Double ML and causal forest assume the effect to be **linear in $T$**. If the effect saturates, they return a mean slope that is correct at no dose; the model must then learn the shape of the curve (S-learner, splines). Overlap here means: every relevant dose must occur among comparable customers; outside the observed range, every estimate is extrapolation.
+
+### Limitations
+
+- The results apply to these data-generating processes. The ranking of the methods depends on the setup, not on a fixed hierarchy.
+- The ATE of the row &ldquo;Causal forest&rdquo; is the mean of its CATE predictions on the test data set; the doubly robust estimator is listed separately as &ldquo;AIPW (causal forest)&rdquo;. Double ML (without an effect model) and AIPW deliver only an average effect; their CATE-RMSE is therefore poor by construction when the effect is heterogeneous, and their top-30% uplift corresponds to a random selection.
+- In Case 3, overlap is weak at the extremes (for $|X_1| > 2$, the propensity is close to 1). This makes the case harder for all methods, not easier.
+- In real data, the true effect is never known; only proxy validation is possible there (e.g., uplift curves on randomized data).
+- A much larger study of the same kind, with dozens of methods and teams, is the ACIC competition `r cite("dorie2019")`. It reaches the same basic finding: flexible methods help with estimation, but no method wins everywhere.
+
+# References
+
+The numbers in the text refer to this list.
+
+```{r sources, results="asis"}
+for (g in unique(refs$group)) {
+  cat("\n**", g, "**\n\n", sep = "")
+  r <- refs[refs$group == g, ]
+  cat(paste0('<p id="ref-', r$key, '" style="margin: 0 0 6px 2.2em; text-indent: -2.2em;">[', match(r$key, refs$key), "] ", r$text, "</p>"), sep = "\n")
+}
+```
+
+
+# Appendix: Software
+
+```{r software}
+pk <- c("grf", "xgboost", "lightgbm", "ggplot2", "ggrepel", "rmarkdown", "knitr")
+tbl(data.frame(Software = c("R", pk),
+               Version = c(paste(R.version$major, R.version$minor, sep = "."),
+                           vapply(pk, function(p) as.character(packageVersion(p)), ""))),
+    align = c("l", "l"))
+```
+
+<small>`r n_reps` simulations per case, seeds deterministic (1000 · case number + repetition). Code and data: <https://github.com/PhilippPro/blog_philipppro/tree/main/posts/causalml-toy-cases>. As of: 2026-10-26.</small>

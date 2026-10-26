@@ -1,0 +1,6 @@
+.table { width: auto; max-width: 100%; margin-bottom: 1.4em; font-size: 0.93em; }
+.table > thead > tr > th, .table > tbody > tr > td { vertical-align: top; padding: 5px 12px; }
+.table caption { caption-side: bottom; color: #6c757d; font-size: 0.9em; }
+.box { background: #f8f9fa; border-left: 4px solid #2a9d8f; padding: 10px 16px; margin: 12px 0; }
+.lesson { background: #fff8e6; border-left: 4px solid #f4a261; padding: 10px 16px; margin: 12px 0 28px 0; }
+.block { background: #eef4fb; border-left: 4px solid #4361ee; padding: 10px 16px; margin: 12px 0 20px 0; }
